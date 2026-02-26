@@ -1,0 +1,18 @@
+[project]
+name = "cs515-deep-learning"
+version = "0.1.0"
+description = "CS515 Deep Learning"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.4.2",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pytest>=9.0.2",
+    "ruff>=0.15.2",
+]
