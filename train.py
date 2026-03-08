@@ -1,11 +1,32 @@
+"""Training utilities for the MLP classification pipeline.
+
+Provides data loading, single-epoch training with optional L1
+regularisation, validation, LR scheduling, early stopping, and
+plotly-based training curve visualisation.
+"""
+
 import copy
+import os
+
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 
-def get_transforms(params, train=True):
+def get_transforms(params: dict, train: bool = True) -> transforms.Compose:
+    """Build a torchvision transform pipeline for the chosen dataset.
+
+    Args:
+        params: Configuration dictionary (needs ``dataset``, ``mean``, ``std``).
+        train: If ``True``, include data-augmentation transforms.
+
+    Returns:
+        A composed transform pipeline.
+    """
     mean, std = params["mean"], params["std"]
 
     if params["dataset"] == "mnist":
@@ -28,7 +49,15 @@ def get_transforms(params, train=True):
             ])
 
 
-def get_loaders(params):
+def get_loaders(params: dict) -> tuple[DataLoader, DataLoader]:
+    """Create train and validation data loaders.
+
+    Args:
+        params: Configuration dictionary.
+
+    Returns:
+        A ``(train_loader, val_loader)`` tuple.
+    """
     train_tf = get_transforms(params, train=True)
     val_tf   = get_transforms(params, train=False)
 
@@ -46,7 +75,29 @@ def get_loaders(params):
     return train_loader, val_loader
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, log_interval, l1_lambda=0.0):
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    device: torch.device,
+    log_interval: int,
+    l1_lambda: float = 0.0,
+) -> tuple[float, float]:
+    """Train the model for one epoch.
+
+    Args:
+        model: Network to train.
+        loader: Training data loader.
+        optimizer: Optimiser instance.
+        criterion: Loss function.
+        device: Torch device.
+        log_interval: Print stats every *n* batches.
+        l1_lambda: L1 regularisation coefficient (0 = disabled).
+
+    Returns:
+        ``(average_loss, accuracy)`` over the epoch.
+    """
     model.train()
     total_loss, correct, n = 0.0, 0, 0
     for batch_idx, (imgs, labels) in enumerate(loader):
@@ -75,7 +126,23 @@ def train_one_epoch(model, loader, optimizer, criterion, device, log_interval, l
     return total_loss / n, correct / n
 
 
-def validate(model, loader, criterion, device):
+def validate(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Evaluate the model on a validation / test set.
+
+    Args:
+        model: Network to evaluate.
+        loader: Validation data loader.
+        criterion: Loss function.
+        device: Torch device.
+
+    Returns:
+        ``(average_loss, accuracy)`` over the dataset.
+    """
     model.eval()
     total_loss, correct, n = 0.0, 0, 0
     with torch.no_grad():
@@ -89,7 +156,98 @@ def validate(model, loader, criterion, device):
     return total_loss / n, correct / n
 
 
-def run_training(model, params, device):
+def plot_training_history_png(history: dict, results_dir: str) -> None:
+    """Save training curves as a PNG image using matplotlib.
+
+    Creates a figure with two subplots (loss and accuracy) and saves
+    it to ``results_dir/training_history.png``.
+
+    Args:
+        history: Dictionary with keys ``train_loss``, ``val_loss``,
+            ``train_acc``, ``val_acc``.
+        results_dir: Directory where the PNG file is saved.
+    """
+    os.makedirs(results_dir, exist_ok=True)
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+    # -- Loss --
+    ax1.plot(epochs, history["train_loss"], "o-", label="Train Loss")
+    ax1.plot(epochs, history["val_loss"],   "o-", label="Val Loss")
+    ax1.set_ylabel("Loss")
+    ax1.legend()
+    ax1.set_title("Training History")
+    ax1.grid(True, alpha=0.3)
+
+    # -- Accuracy --
+    ax2.plot(epochs, history["train_acc"], "o-", label="Train Acc")
+    ax2.plot(epochs, history["val_acc"],   "o-", label="Val Acc")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Accuracy")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    path = os.path.join(results_dir, "training_history.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Training plots saved to {path}")
+
+
+def plot_training_history(history: dict, results_dir: str) -> None:
+    """Save interactive plotly charts of the training history.
+
+    Generates a single HTML file with two subplots (loss and accuracy)
+    showing both training and validation curves.
+
+    Args:
+        history: Dictionary with keys ``train_loss``, ``val_loss``,
+            ``train_acc``, ``val_acc``, and ``lr``.
+        results_dir: Directory where the HTML file is saved.
+    """
+    os.makedirs(results_dir, exist_ok=True)
+    epochs = list(range(1, len(history["train_loss"]) + 1))
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=("Loss", "Accuracy"),
+        vertical_spacing=0.12,
+    )
+
+    # -- Loss subplot --
+    fig.add_trace(go.Scatter(x=epochs, y=history["train_loss"],
+                             name="Train Loss", mode="lines+markers"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=epochs, y=history["val_loss"],
+                             name="Val Loss", mode="lines+markers"), row=1, col=1)
+
+    # -- Accuracy subplot --
+    fig.add_trace(go.Scatter(x=epochs, y=history["train_acc"],
+                             name="Train Acc", mode="lines+markers"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=epochs, y=history["val_acc"],
+                             name="Val Acc", mode="lines+markers"), row=2, col=1)
+
+    fig.update_xaxes(title_text="Epoch", row=2, col=1)
+    fig.update_yaxes(title_text="Loss", row=1, col=1)
+    fig.update_yaxes(title_text="Accuracy", row=2, col=1)
+    fig.update_layout(title="Training History", height=700, template="plotly_white")
+
+    path = os.path.join(results_dir, "training_history.html")
+    fig.write_html(path)
+    print(f"  Training plots saved to {path}")
+
+
+def run_training(model: nn.Module, params: dict, device: torch.device) -> dict:
+    """Full training loop with early stopping, LR scheduling, and plotting.
+
+    Args:
+        model: Network to train.
+        params: Configuration dictionary.
+        device: Torch device.
+
+    Returns:
+        History dictionary with per-epoch metrics.
+    """
     history = {"train_loss": [], "train_acc": [], 
                 "val_loss": [], "val_acc": [],
                 "lr": []}
@@ -155,3 +313,7 @@ def run_training(model, params, device):
 
     model.load_state_dict(best_weights)
     print(f"\nTraining done. Best val accuracy: {best_acc:.4f}")
+
+    plot_training_history_png(history, params["results_dir"])
+    # plot_training_history(history, params["results_dir"])  # interactive HTML
+    return history
