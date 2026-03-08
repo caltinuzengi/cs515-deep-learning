@@ -1,5 +1,8 @@
+"""The main function for training and evaluating the MLP Classifier."""
+import csv
+import os
+
 import random
-import ssl
 import numpy as np
 import torch
 
@@ -9,11 +12,8 @@ from train import run_training
 from test  import run_test
 
 
-# Fix for macOS SSL certificate verification error when downloading MNIST
-ssl._create_default_https_context = ssl._create_unverified_context
-
-
-def set_seed(seed):
+def set_seed(seed: int) -> None:
+    """Fix all random seeds for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -23,6 +23,7 @@ def set_seed(seed):
 
 
 def build_model(params):
+    """Define and build the model specified *params*."""
     model_name = params["model"]
     dataset    = params["dataset"]
     nc         = params["num_classes"]
@@ -33,30 +34,21 @@ def build_model(params):
             hidden_sizes = params["hidden_sizes"],
             num_classes  = nc,
             dropout      = params["dropout"],
+            activation   = params["activation"],
+            use_batchnorm= params["use_batchnorm"],
         )
-
-    # if model_name == "cnn":
-    #     # MNIST_CNN expects 1-channel 28×28; SimpleCNN expects 3-channel 32×32
-    #     if dataset == "mnist":
-    #         return MNIST_CNN(num_classes=nc)
-    #     else:
-    #         return SimpleCNN(num_classes=nc)
-
-    # if model_name == "vgg":
-    #     if dataset == "mnist":
-    #         raise ValueError("VGG is designed for 3-channel images; use cifar10 with vgg.")
-    #     return VGG(dept=params["vgg_depth"], num_class=nc)
-
-    # if model_name == "resnet":
-    #     if dataset == "mnist":
-    #         raise ValueError("ResNet is designed for 3-channel images; use cifar10 with resnet.")
-    #     return ResNet(BasicBlock, params["resnet_layers"], num_classes=nc)
 
     raise ValueError(f"Unknown model: {model_name}")
 
 
 def main():
+    """Parse arguments, build model, train and evaluate."""
     params = get_params()
+
+    exp_dir = os.path.join(params["results_dir"], params["exp_name"])
+    os.makedirs(exp_dir, exist_ok=True)
+    params["results_dir"] = exp_dir
+    params["save_path"] = os.path.join(exp_dir, "best_model.pth")
 
     set_seed(params["seed"])
     print(f"Seed set to: {params['seed']}")
@@ -72,11 +64,47 @@ def main():
     model = build_model(params).to(device)
     print(model)
 
+    best_val_acc = 0.0
     if params["mode"] in ("train", "both"):
-        run_training(model, params, device)
+        history = run_training(model, params, device)
+        best_val_acc = max(history["val_acc"])
 
+    test_acc = 0.0
     if params["mode"] in ("test", "both"):
-        run_test(model, params, device)
+        test_acc = run_test(model, params, device)
+
+    log_to_csv(params, best_val_acc, test_acc)
+
+
+# This function makes it easier for us to track ablation results.
+def log_to_csv(params: dict, best_val_acc: float, test_acc: float) -> None:
+    """Append one row of experiment results to ablation_results.csv.
+    This function makes it easier for us to track ablation results.
+    """
+    csv_path = os.path.join(params["results_dir"], "..", "ablation_results.csv")
+    file_exists = os.path.exists(csv_path)
+
+    row = {
+        "exp_name": params["exp_name"],
+        "hidden_sizes": str(params["hidden_sizes"]),
+        "activation": params["activation"],
+        "use_batchnorm": params["use_batchnorm"],
+        "dropout": params["dropout"],
+        "optimizer": params["optimizer"],
+        "lr_scheduler": params["lr_scheduler"],
+        "weight_decay": params["weight_decay"],
+        "l1_lambda": params["l1_lambda"],
+        "epochs": params["epochs"],
+        "best_val_acc": f"{best_val_acc:.4f}",
+        "test_acc": f"{test_acc:.4f}",
+    }
+
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+    print(f"  Results appended to {csv_path}")
 
 
 if __name__ == "__main__":

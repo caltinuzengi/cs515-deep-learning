@@ -1,0 +1,6 @@
+exp_name,hidden_sizes,activation,use_batchnorm,dropout,optimizer,lr_scheduler,weight_decay,l1_lambda,epochs,best_val_acc,test_acc
+arch_baseline_512_256_128,"[512, 256, 128]",relu,True,0.3,adam,step,0.0001,0.0,10,0.9852,0.9852
+arch_shallow_128,[128],relu,True,0.3,adam,step,0.0001,0.0,10,0.9788,0.9788
+arch_deep_512_256_128_64,"[512, 256, 128, 64]",relu,True,0.3,adam,step,0.0001,0.0,10,0.9847,0.9847
+arch_wide_1024,[1024],relu,True,0.3,adam,step,0.0001,0.0,10,0.9831,0.9831
+arch_wide_deep_1024_512_256,"[1024, 512, 256]",relu,True,0.3,adam,step,0.0001,0.0,10,0.9833,0.9833

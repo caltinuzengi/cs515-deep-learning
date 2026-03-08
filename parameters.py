@@ -53,8 +53,9 @@ class TrainParams:
     weight_decay: float
     l1_lambda: float
     lr_scheduler: str
-    early_stop_patience: int
-    log_interval: int
+    optimizer: str = "adam"
+    early_stop_patience: int = 5
+    log_interval: int = 100
 
 
 @dataclass
@@ -66,6 +67,7 @@ class MiscParams:
     save_path: str
     mode: str
     results_dir: str
+    exp_name: str = "default"
 
 
 # ---------------------------------------------------------------------------
@@ -101,9 +103,12 @@ def get_params() -> dict:
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--l1_lambda", type=float, default=0.0)
     parser.add_argument("--lr_scheduler", type=str, choices=["step", "cosine", "plateau"], default="step")
+    parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "sgd"], default="adam",
+                        help="Optimizer: adam | adamw | sgd (momentum=0.9).")
     parser.add_argument("--early_stop_patience", type=int, default=5)
     parser.add_argument("--save_path", type=str, default="best_model.pth")
     parser.add_argument("--results_dir", type=str, default="./results")
+    parser.add_argument("--exp_name", type=str, default="default", help="Experiment name for organizing results.")
 
     args = parser.parse_args()
 
@@ -122,21 +127,32 @@ def get_params() -> dict:
         num_workers=2, mean=mean, std=std,
     )
     model = ModelParams(
-        model=args.model, input_size=input_size,
-        hidden_sizes=args.hidden_sizes, num_classes=10,
-        dropout=args.dropout, activation=args.activation,
+        model=args.model, 
+        input_size=input_size,
+        hidden_sizes=args.hidden_sizes, 
+        num_classes=10,
+        dropout=args.dropout, 
+        activation=args.activation,
         use_batchnorm=args.use_batchnorm,
     )
     train = TrainParams(
-        epochs=args.epochs, batch_size=args.batch_size,
-        learning_rate=args.lr, weight_decay=args.weight_decay,
-        l1_lambda=args.l1_lambda, lr_scheduler=args.lr_scheduler,
-        early_stop_patience=args.early_stop_patience, log_interval=100,
+        epochs=args.epochs, 
+        batch_size=args.batch_size,
+        learning_rate=args.lr, 
+        weight_decay=args.weight_decay,
+        l1_lambda=args.l1_lambda, 
+        lr_scheduler=args.lr_scheduler,
+        optimizer=args.optimizer,
+        early_stop_patience=args.early_stop_patience, 
+        log_interval=100,
     )
     misc = MiscParams(
-        seed=42, device=args.device,
-        save_path=args.save_path, mode=args.mode,
+        seed=42, 
+        device=args.device,
+        save_path=args.save_path, 
+        mode=args.mode,
         results_dir=args.results_dir,
+        exp_name=args.exp_name,
     )
 
     # Merge all dataclass fields into a single flat dict

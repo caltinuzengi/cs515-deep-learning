@@ -254,10 +254,22 @@ def run_training(model: nn.Module, params: dict, device: torch.device) -> dict:
 
     train_loader, val_loader = get_loaders(params)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(),
-                                 lr=params["learning_rate"],
-                                 weight_decay=params["weight_decay"])
-    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+
+    # -- Configurable optimizer --
+    if params["optimizer"] == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(),
+                                      lr=params["learning_rate"],
+                                      weight_decay=params["weight_decay"])
+    elif params["optimizer"] == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(),
+                                    lr=params["learning_rate"],
+                                    momentum=0.9,
+                                    weight_decay=params["weight_decay"])
+    else:  # adam (default)
+        optimizer = torch.optim.Adam(model.parameters(),
+                                     lr=params["learning_rate"],
+                                     weight_decay=params["weight_decay"])
+    
     if params["lr_scheduler"] == "step":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
     elif params["lr_scheduler"] == "cosine":

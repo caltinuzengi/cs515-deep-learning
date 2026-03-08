@@ -70,13 +70,16 @@ def plot_tsne(features: np.ndarray, labels: np.ndarray,
     print(f"  t-SNE plot saved to {path}")
 
 @torch.no_grad()
-def run_test(model: nn.Module, params: dict, device: torch.device) -> None:
+def run_test(model: nn.Module, params: dict, device: torch.device) -> float:
     """Evaluate a trained model and generate confusion matrix + t-SNE plots.
 
     Args:
         model: Trained network.
         params: Configuration dictionary.
         device: Torch device.
+
+    Returns:
+        Overall test accuracy.
     """
     tf = get_transforms(params, train=False)
 
@@ -90,25 +93,6 @@ def run_test(model: nn.Module, params: dict, device: torch.device) -> None:
 
     model.load_state_dict(torch.load(params["save_path"], map_location=device))
     model.eval()
-
-    # correct, n = 0, 0
-    # class_correct = [0] * params["num_classes"]
-    # class_total   = [0] * params["num_classes"]
-
-    # for imgs, labels in loader:
-    #     imgs, labels = imgs.to(device), labels.to(device)
-    #     preds = model(imgs).argmax(1)
-    #     correct += preds.eq(labels).sum().item()
-    #     n       += imgs.size(0)
-    #     for p, t in zip(preds, labels):
-    #         class_correct[t] += (p == t).item()
-    #         class_total[t]   += 1
-
-    # print(f"\n=== Test Results ===")
-    # print(f"Overall accuracy: {correct/n:.4f}  ({correct}/{n})\n")
-    # for i in range(params["num_classes"]):
-    #     acc = class_correct[i] / class_total[i]
-    #     print(f"  Class {i}: {acc:.4f}  ({class_correct[i]}/{class_total[i]})")
 
     # This is for confusion matrix and t-SNE
     # Since for that we need all the predictions and labels
@@ -161,3 +145,5 @@ def run_test(model: nn.Module, params: dict, device: torch.device) -> None:
     plot_confusion_matrix(all_labels, all_preds, params["num_classes"], params["results_dir"])
     print("Generating t-SNE plot...")
     plot_tsne(all_features, all_labels.numpy(), params["num_classes"], params["results_dir"])
+
+    return correct / n
