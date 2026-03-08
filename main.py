@@ -35,22 +35,22 @@ def build_model(params):
             dropout      = params["dropout"],
         )
 
-    if model_name == "cnn":
-        # MNIST_CNN expects 1-channel 28×28; SimpleCNN expects 3-channel 32×32
-        if dataset == "mnist":
-            return MNIST_CNN(num_classes=nc)
-        else:
-            return SimpleCNN(num_classes=nc)
+    # if model_name == "cnn":
+    #     # MNIST_CNN expects 1-channel 28×28; SimpleCNN expects 3-channel 32×32
+    #     if dataset == "mnist":
+    #         return MNIST_CNN(num_classes=nc)
+    #     else:
+    #         return SimpleCNN(num_classes=nc)
 
-    if model_name == "vgg":
-        if dataset == "mnist":
-            raise ValueError("VGG is designed for 3-channel images; use cifar10 with vgg.")
-        return VGG(dept=params["vgg_depth"], num_class=nc)
+    # if model_name == "vgg":
+    #     if dataset == "mnist":
+    #         raise ValueError("VGG is designed for 3-channel images; use cifar10 with vgg.")
+    #     return VGG(dept=params["vgg_depth"], num_class=nc)
 
-    if model_name == "resnet":
-        if dataset == "mnist":
-            raise ValueError("ResNet is designed for 3-channel images; use cifar10 with resnet.")
-        return ResNet(BasicBlock, params["resnet_layers"], num_classes=nc)
+    # if model_name == "resnet":
+    #     if dataset == "mnist":
+    #         raise ValueError("ResNet is designed for 3-channel images; use cifar10 with resnet.")
+    #     return ResNet(BasicBlock, params["resnet_layers"], num_classes=nc)
 
     raise ValueError(f"Unknown model: {model_name}")
 

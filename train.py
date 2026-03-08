@@ -46,7 +46,7 @@ def get_loaders(params):
     return train_loader, val_loader
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, log_interval):
+def train_one_epoch(model, loader, optimizer, criterion, device, log_interval, l1_lambda=0.0):
     model.train()
     total_loss, correct, n = 0.0, 0, 0
     for batch_idx, (imgs, labels) in enumerate(loader):
@@ -55,6 +55,12 @@ def train_one_epoch(model, loader, optimizer, criterion, device, log_interval):
         optimizer.zero_grad()
         out  = model(imgs)
         loss = criterion(out, labels)
+        
+        # L1 regularization
+        if l1_lambda > 0:
+            l1_norm = sum(p.abs().sum() for p in model.parameters())
+            loss = loss + l1_lambda * l1_norm
+
         loss.backward()
         optimizer.step()
 
@@ -84,22 +90,43 @@ def validate(model, loader, criterion, device):
 
 
 def run_training(model, params, device):
+    history = {"train_loss": [], "train_acc": [], 
+                "val_loss": [], "val_acc": [],
+                "lr": []}
+
     train_loader, val_loader = get_loaders(params)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(),
                                  lr=params["learning_rate"],
                                  weight_decay=params["weight_decay"])
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    if params["lr_scheduler"] == "step":
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+    elif params["lr_scheduler"] == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params["epochs"])
+    elif params["lr_scheduler"] == "plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=3)
+    else:
+        scheduler = None
 
     best_acc     = 0.0
     best_weights = None
 
+    patience_counter = 0
+    best_val_loss = float('inf')
+
     for epoch in range(1, params["epochs"] + 1):
         print(f"\nEpoch {epoch}/{params['epochs']}")
-        tr_loss, tr_acc = train_one_epoch(model, train_loader, optimizer,
-                                          criterion, device, params["log_interval"])
-        val_loss, val_acc = validate(model, val_loader, criterion, device)
-        scheduler.step()
+        tr_loss, tr_acc = train_one_epoch(model = model, 
+                                            loader = train_loader, optimizer = optimizer,
+                                            criterion = criterion, device = device, 
+                                            log_interval = params["log_interval"], l1_lambda = params["l1_lambda"])
+        val_loss, val_acc = validate(model = model, loader = val_loader, criterion = criterion, device = device)
+        # scheduler.step()
+        if params["lr_scheduler"] == "plateau":
+            scheduler.step(val_loss)
+        else:
+            scheduler.step()
 
         print(f"  Train loss: {tr_loss:.4f}  acc: {tr_acc:.4f}")
         print(f"  Val   loss: {val_loss:.4f}  acc: {val_acc:.4f}")
@@ -109,6 +136,22 @@ def run_training(model, params, device):
             best_weights = copy.deepcopy(model.state_dict())
             torch.save(best_weights, params["save_path"])
             print(f"  Saved best model (val_acc={best_acc:.4f})")
+        
+        history["train_loss"].append(tr_loss)
+        history["train_acc"].append(tr_acc)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
+        history["lr"].append(optimizer.param_groups[0]["lr"])
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+        
+        if patience_counter >= params["early_stop_patience"]:
+            print(f"Early stopping at epoch {epoch}")
+            break
 
     model.load_state_dict(best_weights)
     print(f"\nTraining done. Best val accuracy: {best_acc:.4f}")
