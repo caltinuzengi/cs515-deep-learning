@@ -319,7 +319,7 @@ def run_training(model: nn.Module, params: dict, device: torch.device) -> dict:
         else:
             patience_counter += 1
         
-        if patience_counter >= params["early_stop_patience"]:
+        if params["early_stop_patience"] > 0 and patience_counter >= params["early_stop_patience"]:
             print(f"Early stopping at epoch {epoch}")
             break
 
