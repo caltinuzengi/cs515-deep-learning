@@ -13,7 +13,8 @@ Example::
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, field
+import dataclasses
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------------------
 # Dataclasses — structured documentation for each parameter group
@@ -41,6 +42,7 @@ class ModelParams:
     dropout: float
     activation: str
     use_batchnorm: bool
+    vgg_depth: str = "16"
 
 
 @dataclass
@@ -69,6 +71,25 @@ class MiscParams:
     results_dir: str
     exp_name: str = "default"
 
+@dataclass
+class TransferParams:
+    """Transfer learning settings."""
+    
+    transfer_strategy: str = "none"     # none | resize | modify_conv
+    pretrained: bool = False            # Whether to use pretrained weights
+
+@dataclass
+class DistillationParams:
+    """Knowledge distillation settings."""
+
+    training_mode: str = "standard"     # standard | distillation | teacher_prob
+    teacher_path: str = ""              # Path to the teacher model for distillation
+    teacher_model: str = "resnet"       # Architecture of the teacher model for distillation
+    kd_temperature: float = 3.0         # Temperature for knowledge distillation
+    kd_alpha: float = 0.7               # Alpha for balancing distillation loss and standard loss
+    label_smoothing: float = 0.0        # Label smoothing factor (0.0 = no smoothing)
+
+
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -89,7 +110,7 @@ def get_params() -> dict:
 
     parser.add_argument("--mode",      choices=["train", "test", "both"], default="both")
     parser.add_argument("--dataset",   choices=["mnist", "cifar10"],      default="mnist")
-    parser.add_argument("--model",     choices=["mlp"], default="mlp")
+    parser.add_argument("--model",     choices=["mlp", "cnn", "resnet", "vgg16", "mobilenet"], default="mlp")
     parser.add_argument("--epochs",    type=int,   default=10)
     parser.add_argument("--lr",        type=float, default=1e-3)
     parser.add_argument("--device",    type=str,   default="cpu")
@@ -109,6 +130,22 @@ def get_params() -> dict:
     parser.add_argument("--save_path", type=str, default="best_model.pth")
     parser.add_argument("--results_dir", type=str, default="./results")
     parser.add_argument("--exp_name", type=str, default="default", help="Experiment name for organizing results.")
+
+    parser.add_argument("--transfer_strategy", type=str, choices=["none", "resize", "modify_conv"], default="none")
+    parser.add_argument("--pretrained", type=lambda v: v.lower() in ("true", "1", "yes"), default=False,
+                        help="Whether to use pretrained weights for transfer learning.")
+    parser.add_argument("--label_smoothing", type=float, default=0.0, help="Label smoothing factor (0.0 = no smoothing).")
+    parser.add_argument("--training_mode", type=str, choices=["standard", "distillation", "teacher_prob"], default="standard",
+                        help="Training mode: standard | distillation | teacher_prob.")
+    parser.add_argument("--teacher_path", type=str, default="",
+                        help="Path to the teacher model for distillation.")
+    parser.add_argument("--teacher_model", type=str, choices=["mlp", "cnn", "resnet", "vgg16", "mobilenet"], default="resnet",
+                        help="Architecture of the teacher model for distillation.")
+    parser.add_argument("--kd_temperature", type=float, default=3.0, help="Temperature for knowledge distillation.")
+    parser.add_argument("--kd_alpha", type=float, default=0.7, help="Alpha for balancing distillation loss and standard loss.")
+    
+    parser.add_argument("--vgg_depth", type=str, choices=["11", "13", "16", "19"], default="16",
+                        help="Depth of VGG model: 11 | 13 | 16 | 19.")
 
     args = parser.parse_args()
 
@@ -134,6 +171,7 @@ def get_params() -> dict:
         dropout=args.dropout, 
         activation=args.activation,
         use_batchnorm=args.use_batchnorm,
+        vgg_depth=args.vgg_depth,
     )
     train = TrainParams(
         epochs=args.epochs, 
@@ -155,10 +193,23 @@ def get_params() -> dict:
         exp_name=args.exp_name,
     )
 
+    transfer = TransferParams(
+        transfer_strategy=args.transfer_strategy,
+        pretrained=args.pretrained,
+    )
+
+    distillation = DistillationParams(
+        training_mode=args.training_mode,
+        teacher_path=args.teacher_path,
+        teacher_model=args.teacher_model,
+        kd_temperature=args.kd_temperature,
+        kd_alpha=args.kd_alpha,
+        label_smoothing=args.label_smoothing,
+    )
+
     # Merge all dataclass fields into a single flat dict
     merged: dict = {}
-    for dc in (data, model, train, misc):
-        for key, value in dc.__dict__.items():
-            merged[key] = value
+    for dc in (data, model, train, misc, transfer, distillation):
+        merged.update(dataclasses.asdict(dc))
 
     return merged

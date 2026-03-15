@@ -8,6 +8,10 @@ import torch
 
 from parameters import get_params
 from models.MLP import MLP
+from models.CNN import MNIST_CNN, SimpleCNN
+from models.ResNet import ResNet, BasicBlock
+from models.VGG import VGG
+from models.mobilenet import MobileNetV2
 from train import run_training
 from test  import run_test
 
@@ -24,9 +28,11 @@ def set_seed(seed: int) -> None:
 
 def build_model(params):
     """Define and build the model specified *params*."""
-    model_name = params["model"]
-    dataset    = params["dataset"]
-    nc         = params["num_classes"]
+    model_name          = params["model"]
+    dataset             = params["dataset"]
+    nc                  = params["num_classes"]
+    pretrained          = params["pretrained"]
+    transfer_strategy   = params["transfer_strategy"]
 
     if model_name == "mlp":
         return MLP(
@@ -37,6 +43,27 @@ def build_model(params):
             activation   = params["activation"],
             use_batchnorm= params["use_batchnorm"],
         )
+    if model_name == "cnn":
+        if dataset == "mnist":
+            return MNIST_CNN(num_classes=nc)
+        else:
+            return SimpleCNN(num_classes=nc)
+        
+    if model_name == "resnet":
+        if dataset == "mnist":
+            raise ValueError("ResNet is designed for 3-channel images; use cifar10 with resnet.")
+        return ResNet(BasicBlock, params["resnet_layers"], num_classes=nc)
+    
+    if model_name == "vgg":
+        if dataset == "mnist":
+            raise ValueError("VGG is designed for 3-channel images; use cifar10 with vgg.")
+        return VGG(dept=params["vgg_depth"], num_class=nc)
+
+    if model_name == "mobilenet":
+        if dataset == "mnist":
+            raise ValueError("MobileNetV2 is designed for 3-channel images; use cifar10 with mobilenet.")
+        return MobileNetV2(num_classes=nc)     
+
 
     raise ValueError(f"Unknown model: {model_name}")
 
