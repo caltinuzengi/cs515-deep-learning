@@ -95,7 +95,9 @@ def build_model(params: dict) -> nn.Module:
     nc                = params["num_classes"]
     pretrained        = params["pretrained"]
 
-    # ── MLP ──
+    #---------------------------------------
+    # MLP
+    #---------------------------------------
     if model_name == "mlp":
         return MLP(
             input_size   = params["input_size"],
@@ -106,13 +108,17 @@ def build_model(params: dict) -> nn.Module:
             use_batchnorm= params["use_batchnorm"],
         )
 
-    # ── CNN ──
+    #----------------------------------------  
+    # CNN
+    #----------------------------------------
     if model_name == "cnn":
         if dataset == "mnist":
             return MNIST_CNN(num_classes=nc)
         return SimpleCNN(num_classes=nc)
 
-    # ── ResNet ──
+    #----------------------------------------  
+    # ResNet
+    #----------------------------------------
     if model_name == "resnet":
         if dataset == "mnist":
             raise ValueError("ResNet is designed for 3-channel images; use cifar10.")
@@ -120,7 +126,9 @@ def build_model(params: dict) -> nn.Module:
             return _build_pretrained_resnet(params)
         return ResNet(BasicBlock, params["resnet_layers"], num_classes=nc)
 
-    # ── VGG ──
+    #----------------------------------------  
+    # VGG16
+    #----------------------------------------
     if model_name == "vgg16":
         if dataset == "mnist":
             raise ValueError("VGG is designed for 3-channel images; use cifar10.")
@@ -128,7 +136,9 @@ def build_model(params: dict) -> nn.Module:
             return _build_pretrained_vgg(params)
         return VGG(depth=params["vgg_depth"], num_class=nc)
 
-    # ── MobileNet ──
+    #----------------------------------------  
+    # MobileNetV2
+    #----------------------------------------
     if model_name == "mobilenet":
         if dataset == "mnist":
             raise ValueError("MobileNetV2 is designed for 3-channel images; use cifar10.")
@@ -139,9 +149,9 @@ def build_model(params: dict) -> nn.Module:
 
 def _build_teacher(params: dict, device: torch.device) -> nn.Module:
     """Load a pre-trained teacher model from a checkpoint for KD."""
-    teacher_params = dict(params)  # shallow copy
+    teacher_params = dict(params)  
     teacher_params["model"] = params["teacher_model"]
-    teacher_params["pretrained"] = False          # build scratch architecture
+    teacher_params["pretrained"] = False          
     teacher_params["transfer_strategy"] = "none"
 
     teacher = build_model(teacher_params).to(device)
@@ -167,11 +177,20 @@ def main():
     print(f"Seed set to: {params['seed']}")
     print(f"Dataset: {params['dataset']}  |  Model: {params['model']}")
 
-    device = torch.device(
-        params["device"] if torch.cuda.is_available() else
-        "mps" if torch.backends.mps.is_available() else
-        "cpu"
-    )
+    # device = torch.device(
+    #     params["device"] if torch.cuda.is_available() else
+    #     "mps" if torch.backends.mps.is_available() else
+    #     "cpu"
+    # )
+    if params["device"] != "auto":
+        device = torch.device(params["device"])
+    else:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
     print(f"Using device: {device}")
 
     model = build_model(params).to(device)

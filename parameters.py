@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
 # Dataclasses — structured documentation for each parameter group
@@ -33,7 +33,7 @@ class DataParams:
 
 @dataclass
 class ModelParams:
-    """MLP architecture settings."""
+    """Deep Learning Model architecture settings."""
 
     model: str
     input_size: int
@@ -43,11 +43,12 @@ class ModelParams:
     activation: str
     use_batchnorm: bool
     vgg_depth: str = "16"
-    resnet_layers: list[int] = None      # Number of blocks per layer, e.g. [2,2,2,2] for ResNet-18
+    resnet_layers: list[int] = field(default_factory=lambda: [2, 2, 2, 2])  # Default to ResNet-18
 
-    def __post_init__(self):
-        if self.resnet_layers is None:
-            self.resnet_layers = [2, 2, 2, 2]
+    # def __post_init__(self):
+    #     # Number of blocks per layer, e.g. [2,2,2,2] for ResNet-18
+    #     if self.resnet_layers is None:
+    #         self.resnet_layers = [2, 2, 2, 2]
 
 
 @dataclass
@@ -84,6 +85,11 @@ class TransferParams:
     pretrained: bool = False            # Whether to use pretrained weights
     freeze_layers: bool = False         # Whether to freeze early layers in transfer learning
 
+    # To avoid from silent bug when freeze_layers=True but transfer_strategy=modify_conv, we can add a post-init check
+    def __post_init__(self):
+        if self.transfer_strategy == "modify_conv" and self.freeze_layers:
+            raise ValueError("Cannot freeze layers when using 'modify_conv' transfer strategy, as the architecture is changed.")
+
 @dataclass
 class DistillationParams:
     """Knowledge distillation settings."""
@@ -94,6 +100,14 @@ class DistillationParams:
     kd_temperature: float = 3.0         # Temperature for knowledge distillation
     kd_alpha: float = 0.7               # Alpha for balancing distillation loss and standard loss
     label_smoothing: float = 0.0        # Label smoothing factor (0.0 = no smoothing)
+
+    def __post_init__(self):
+        if self.training_mode in ("distillation", "teacher_prob") and not self.teacher_path:
+            raise ValueError(f"teacher_path must be provided for {self.training_mode} training mode.")
+        if not (0.0 <= self.kd_alpha <= 1.0):
+            raise ValueError(f"kd_alpha must be in the range [0.0, 1.0]. Got: {self.kd_alpha}")
+        if self.kd_temperature <= 0.0:
+            raise ValueError(f"kd_temperature must be greater than 0.0. Got: {self.kd_temperature}")
 
 
 
@@ -112,7 +126,7 @@ def get_params() -> dict:
         dict: Flat mapping of every parameter name to its value.
     """
 
-    parser = argparse.ArgumentParser(description="CS515-Deep Learning on MNIST")
+    parser = argparse.ArgumentParser(description="CS515-Deep Learning on MNIST and CIFAR-10")
 
     parser.add_argument("--mode",      choices=["train", "test", "both"], default="both")
     parser.add_argument("--dataset",   choices=["mnist", "cifar10"],      default="mnist")
