@@ -1,10 +1,12 @@
-"""The main function for training and evaluating the MLP Classifier."""
+"""The main function for training and evaluating models."""
 import csv
 import os
 
 import random
 import numpy as np
 import torch
+import torch.nn as nn
+import torchvision.models as tv_models
 
 from parameters import get_params
 from models.MLP import MLP
@@ -12,7 +14,7 @@ from models.CNN import MNIST_CNN, SimpleCNN
 from models.ResNet import ResNet, BasicBlock
 from models.VGG import VGG
 from models.mobilenet import MobileNetV2
-from train import run_training
+from train import run_training, run_kd_training, run_teacher_prob_training
 from test  import run_test
 
 
@@ -26,14 +28,74 @@ def set_seed(seed: int) -> None:
     torch.backends.cudnn.benchmark = False
 
 
-def build_model(params):
-    """Define and build the model specified *params*."""
-    model_name          = params["model"]
-    dataset             = params["dataset"]
-    nc                  = params["num_classes"]
-    pretrained          = params["pretrained"]
-    transfer_strategy   = params["transfer_strategy"]
+def _build_pretrained_resnet(params: dict) -> nn.Module:
+    """Build a pretrained ResNet-18 adapted for CIFAR-10.
 
+    Two strategies:
+        - ``resize``:  Keep original conv1 (7×7), freeze early layers optionally.
+        - ``modify_conv``: Replace conv1 with 3×3, remove maxpool, fine-tune all.
+    """
+    nc = params["num_classes"]
+    strategy = params["transfer_strategy"]
+    freeze = params["freeze_layers"]
+
+    model = tv_models.resnet18(weights=tv_models.ResNet18_Weights.DEFAULT)
+
+    if strategy == "modify_conv":
+        # Replace 7×7 conv with 3×3 for 32×32 input (weights can't transfer)
+        model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        model.maxpool = nn.Identity()
+
+    # Replace final FC for num_classes
+    model.fc = nn.Linear(model.fc.in_features, nc)
+
+    # Freeze everything except fc (and conv1 if modified)
+    if freeze:
+        for param in model.parameters():
+            param.requires_grad = False
+        for param in model.fc.parameters():
+            param.requires_grad = True
+
+    return model
+
+
+def _build_pretrained_vgg(params: dict) -> nn.Module:
+    """Build a pretrained VGG-16 adapted for CIFAR-10.
+
+    Two strategies:
+        - ``resize``:  Keep original features, freeze early layers optionally.
+        - ``modify_conv``: Replace first conv for 32×32 input, fine-tune all.
+    """
+    nc = params["num_classes"]
+    strategy = params["transfer_strategy"]
+    freeze = params["freeze_layers"]
+
+    model = tv_models.vgg16(weights=tv_models.VGG16_Weights.DEFAULT)
+
+    if strategy == "modify_conv":
+        # Replace first conv for native 32×32 input
+        model.features[0] = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1)
+
+    # Replace final classifier layer for num_classes
+    model.classifier[6] = nn.Linear(4096, nc)
+
+    if freeze:
+        for param in model.features.parameters():
+            param.requires_grad = False
+        for param in model.classifier.parameters():
+            param.requires_grad = True
+
+    return model
+
+
+def build_model(params: dict) -> nn.Module:
+    """Build the model specified by *params*."""
+    model_name        = params["model"]
+    dataset           = params["dataset"]
+    nc                = params["num_classes"]
+    pretrained        = params["pretrained"]
+
+    # ── MLP ──
     if model_name == "mlp":
         return MLP(
             input_size   = params["input_size"],
@@ -43,29 +105,53 @@ def build_model(params):
             activation   = params["activation"],
             use_batchnorm= params["use_batchnorm"],
         )
+
+    # ── CNN ──
     if model_name == "cnn":
         if dataset == "mnist":
             return MNIST_CNN(num_classes=nc)
-        else:
-            return SimpleCNN(num_classes=nc)
-        
+        return SimpleCNN(num_classes=nc)
+
+    # ── ResNet ──
     if model_name == "resnet":
         if dataset == "mnist":
-            raise ValueError("ResNet is designed for 3-channel images; use cifar10 with resnet.")
+            raise ValueError("ResNet is designed for 3-channel images; use cifar10.")
+        if pretrained:
+            return _build_pretrained_resnet(params)
         return ResNet(BasicBlock, params["resnet_layers"], num_classes=nc)
-    
-    if model_name == "vgg":
-        if dataset == "mnist":
-            raise ValueError("VGG is designed for 3-channel images; use cifar10 with vgg.")
-        return VGG(dept=params["vgg_depth"], num_class=nc)
 
+    # ── VGG ──
+    if model_name == "vgg16":
+        if dataset == "mnist":
+            raise ValueError("VGG is designed for 3-channel images; use cifar10.")
+        if pretrained:
+            return _build_pretrained_vgg(params)
+        return VGG(depth=params["vgg_depth"], num_class=nc)
+
+    # ── MobileNet ──
     if model_name == "mobilenet":
         if dataset == "mnist":
-            raise ValueError("MobileNetV2 is designed for 3-channel images; use cifar10 with mobilenet.")
-        return MobileNetV2(num_classes=nc)     
-
+            raise ValueError("MobileNetV2 is designed for 3-channel images; use cifar10.")
+        return MobileNetV2(num_classes=nc)
 
     raise ValueError(f"Unknown model: {model_name}")
+
+
+def _build_teacher(params: dict, device: torch.device) -> nn.Module:
+    """Load a pre-trained teacher model from a checkpoint for KD."""
+    teacher_params = dict(params)  # shallow copy
+    teacher_params["model"] = params["teacher_model"]
+    teacher_params["pretrained"] = False          # build scratch architecture
+    teacher_params["transfer_strategy"] = "none"
+
+    teacher = build_model(teacher_params).to(device)
+    state = torch.load(params["teacher_path"], map_location=device)
+    teacher.load_state_dict(state)
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad = False
+    print(f"Teacher ({params['teacher_model']}) loaded from {params['teacher_path']}")
+    return teacher
 
 
 def main():
@@ -91,9 +177,19 @@ def main():
     model = build_model(params).to(device)
     print(model)
 
+    # ── Training dispatch ──
+    training_mode = params.get("training_mode", "standard")
     best_val_acc = 0.0
+
     if params["mode"] in ("train", "both"):
-        history = run_training(model, params, device)
+        if training_mode == "distillation":
+            teacher = _build_teacher(params, device)
+            history = run_kd_training(model, teacher, params, device)
+        elif training_mode == "teacher_prob":
+            teacher = _build_teacher(params, device)
+            history = run_teacher_prob_training(model, teacher, params, device)
+        else:
+            history = run_training(model, params, device)
         best_val_acc = max(history["val_acc"])
 
     test_acc = 0.0
@@ -113,14 +209,17 @@ def log_to_csv(params: dict, best_val_acc: float, test_acc: float) -> None:
 
     row = {
         "exp_name": params["exp_name"],
-        "hidden_sizes": str(params["hidden_sizes"]),
-        "activation": params["activation"],
-        "use_batchnorm": params["use_batchnorm"],
-        "dropout": params["dropout"],
+        "model": params["model"],
+        "training_mode": params.get("training_mode", "standard"),
+        "pretrained": params.get("pretrained", False),
+        "transfer_strategy": params.get("transfer_strategy", "none"),
+        "label_smoothing": params.get("label_smoothing", 0.0),
+        "kd_temperature": params.get("kd_temperature", ""),
+        "kd_alpha": params.get("kd_alpha", ""),
         "optimizer": params["optimizer"],
         "lr_scheduler": params["lr_scheduler"],
+        "learning_rate": params["learning_rate"],
         "weight_decay": params["weight_decay"],
-        "l1_lambda": params["l1_lambda"],
         "epochs": params["epochs"],
         "best_val_acc": f"{best_val_acc:.4f}",
         "test_acc": f"{test_acc:.4f}",

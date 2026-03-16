@@ -1,3 +1,7 @@
 torch
 torchvision
 numpy
+ptflops
+scikit-learn
+matplotlib
+plotly

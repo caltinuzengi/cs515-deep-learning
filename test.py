@@ -14,6 +14,41 @@ from torchvision import datasets, transforms
 from train import get_transforms
 
 
+def get_penultimate_layer(model: nn.Module, model_name: str) -> nn.Module:
+    """Return the layer whose output will be used for t-SNE.
+
+    Args:
+        model: The network.
+        model_name: One of ``mlp``, ``cnn``, ``resnet``, ``vgg16``, ``mobilenet``.
+
+    Returns:
+        A reference to the penultimate layer/module.
+    """
+    if model_name == "mlp":
+        return list(model.net.children())[-2]
+
+    if model_name == "cnn":
+        # SimpleCNN / MNIST_CNN — hook on fc1 (last hidden before output)
+        return model.fc1
+
+    if model_name == "resnet":
+        # Both scratch ResNet and pretrained ResNet-18 have avgpool
+        return model.avgpool
+
+    if model_name == "vgg16":
+        # classifier = [Linear, ReLU, Dropout, Linear, ReLU, Dropout, Linear]
+        # Hook on classifier[4] = second ReLU (4096-dim features)
+        if hasattr(model, "classifier") and isinstance(model.classifier, nn.Sequential):
+            return model.classifier[4]
+        return model.features  # fallback for scratch VGG
+
+    if model_name == "mobilenet":
+        # MobileNetV2 (scratch) — hook on bn2 (before avg_pool2d in forward)
+        return model.bn2
+
+    raise ValueError(f"Cannot determine penultimate layer for model: {model_name}")
+
+
 def plot_confusion_matrix(all_labels: torch.Tensor, all_preds: torch.Tensor,
                           num_classes: int, results_dir: str) -> None:
     """Save a confusion matrix heatmap as PNG.
@@ -98,17 +133,16 @@ def run_test(model: nn.Module, params: dict, device: torch.device) -> float:
     # Since for that we need all the predictions and labels
 
     # --- Hook to capture penultimate layer features for t-SNE ---
-    # This part is a bit advanced, but it's a good way to see what the model is learning
-    #This part is to visualize the features of the penultimate layer for drawing t-SNE
     feature_store: list[torch.Tensor] = []
 
     def _hook_fn(_module, _input, output):
-        feature_store.append(output.cpu())
+        # avgpool and similar layers may return (B, C, 1, 1) — flatten to (B, C)
+        feat = output.cpu()
+        if feat.dim() > 2:
+            feat = feat.view(feat.size(0), -1)
+        feature_store.append(feat)
 
-    # The last element in model.net is the output Linear;
-    # the one before it is the last hidden block's Dropout.
-    # We hook the output of the second-to-last layer. -> This trick is used to visualize the features of the penultimate layer for drawing t-SNE
-    penultimate = list(model.net.children())[-2]
+    penultimate = get_penultimate_layer(model, params["model"])
     hook_handle = penultimate.register_forward_hook(_hook_fn)
 
     # --- Collect predictions and labels ---

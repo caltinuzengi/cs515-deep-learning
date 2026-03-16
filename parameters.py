@@ -43,6 +43,11 @@ class ModelParams:
     activation: str
     use_batchnorm: bool
     vgg_depth: str = "16"
+    resnet_layers: list[int] = None      # Number of blocks per layer, e.g. [2,2,2,2] for ResNet-18
+
+    def __post_init__(self):
+        if self.resnet_layers is None:
+            self.resnet_layers = [2, 2, 2, 2]
 
 
 @dataclass
@@ -77,6 +82,7 @@ class TransferParams:
     
     transfer_strategy: str = "none"     # none | resize | modify_conv
     pretrained: bool = False            # Whether to use pretrained weights
+    freeze_layers: bool = False         # Whether to freeze early layers in transfer learning
 
 @dataclass
 class DistillationParams:
@@ -146,6 +152,10 @@ def get_params() -> dict:
     
     parser.add_argument("--vgg_depth", type=str, choices=["11", "13", "16", "19"], default="16",
                         help="Depth of VGG model: 11 | 13 | 16 | 19.")
+    parser.add_argument("--freeze_layers", type=lambda v: v.lower() in ("true", "1", "yes"), default=False,
+                        help="Freeze early layers in transfer learning.")
+    parser.add_argument("--resnet_layers", type=int, nargs="+", default=[2, 2, 2, 2],
+                        help="Number of blocks per ResNet layer, e.g. 2 2 2 2 for ResNet-18.")
 
     args = parser.parse_args()
 
@@ -172,6 +182,7 @@ def get_params() -> dict:
         activation=args.activation,
         use_batchnorm=args.use_batchnorm,
         vgg_depth=args.vgg_depth,
+        resnet_layers=args.resnet_layers,
     )
     train = TrainParams(
         epochs=args.epochs, 
@@ -196,6 +207,7 @@ def get_params() -> dict:
     transfer = TransferParams(
         transfer_strategy=args.transfer_strategy,
         pretrained=args.pretrained,
+        freeze_layers=args.freeze_layers,
     )
 
     distillation = DistillationParams(
