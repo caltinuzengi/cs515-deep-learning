@@ -27,6 +27,7 @@ class DataParams:
     dataset: str
     data_dir: str
     num_workers: int
+    val_ratio: float
     mean: tuple[float, ...]
     std: tuple[float, ...]
 
@@ -135,6 +136,8 @@ def get_params() -> dict:
     parser.add_argument("--lr",        type=float, default=1e-3)
     parser.add_argument("--device",    type=str,   default="cpu")
     parser.add_argument("--batch_size",type=int,   default=64)
+    parser.add_argument("--val_ratio", type=float, default=0.1,
+                        help="Validation split ratio taken from the official train split.")
     parser.add_argument("--hidden_sizes", type=int, nargs="+", default=[512, 256, 128])
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--activation", type=str, choices=["relu", "gelu"], default="relu")
@@ -185,7 +188,7 @@ def get_params() -> dict:
     # Populate dataclasses (serves as living documentation)
     data = DataParams(
         dataset=args.dataset, data_dir="./data",
-        num_workers=2, mean=mean, std=std,
+        num_workers=2, val_ratio=args.val_ratio, mean=mean, std=std,
     )
     model = ModelParams(
         model=args.model, 

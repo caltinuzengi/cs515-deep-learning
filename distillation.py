@@ -21,10 +21,6 @@ def distillation_loss(
     Combines a soft KL-divergence term (teacher's dark knowledge) with
     a hard cross-entropy term (ground-truth labels).
 
-    .. math::
-        L = \\alpha \\cdot T^2 \\cdot D_{KL}(\\sigma(z_s/T) \\| \\sigma(z_t/T))
-            + (1 - \\alpha) \\cdot CE(z_s, y)
-
     Args:
         student_logits: Raw logits from the student, shape ``(B, C)``.
         teacher_logits: Raw logits from the teacher, shape ``(B, C)``.
@@ -50,6 +46,7 @@ def teacher_prob_soft_labels(
     teacher_logits: torch.Tensor,
     labels: torch.Tensor,
     num_classes: int,
+    temperature: float = 1.0,
 ) -> torch.Tensor:
     """Build soft labels using the teacher's confidence on the true class.
 
@@ -62,11 +59,11 @@ def teacher_prob_soft_labels(
         teacher_logits: Raw logits from the teacher, shape ``(B, C)``.
         labels: Ground-truth class indices, shape ``(B,)``.
         num_classes: Total number of classes (C).
-
+        temperature: Softmax temperature (higher = softer distributions).
     Returns:
         Soft label tensor of shape ``(B, C)`` that sums to 1 per row.
     """
-    teacher_probs = F.softmax(teacher_logits, dim=1)  # (B, C)
+    teacher_probs = F.softmax(teacher_logits / temperature, dim=1)  # (B, C)
     p_true = teacher_probs.gather(1, labels.unsqueeze(1))  # (B, 1)
 
     # Equal share for non-true classes

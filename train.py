@@ -9,11 +9,13 @@ import copy
 import os
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
-from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
 
@@ -81,13 +83,27 @@ def get_loaders(params: dict) -> tuple[DataLoader, DataLoader]:
     """
     train_tf = get_transforms(params, train=True)
     val_tf   = get_transforms(params, train=False)
+    val_ratio = params.get("val_ratio", 0.1)
 
-    if params["dataset"] == "mnist":
-        train_ds = datasets.MNIST(params["data_dir"], train=True,  download=True, transform=train_tf)
-        val_ds   = datasets.MNIST(params["data_dir"], train=False, download=True, transform=val_tf)
-    else:  # cifar10
-        train_ds = datasets.CIFAR10(params["data_dir"], train=True,  download=True, transform=train_tf)
-        val_ds   = datasets.CIFAR10(params["data_dir"], train=False, download=True, transform=val_tf)
+    if not (0.0 < val_ratio < 1.0):
+        raise ValueError(f"val_ratio must be in (0, 1). Got: {val_ratio}")
+
+    ds_cls = datasets.MNIST if params["dataset"] == "mnist" else datasets.CIFAR10
+
+    train_full = ds_cls(params["data_dir"], train=True, download=True, transform=train_tf)
+    val_full   = ds_cls(params["data_dir"], train=True, download=True, transform=val_tf)
+
+    targets = np.array(train_full.targets)
+    indices = np.arange(len(targets))
+    train_idx, val_idx = train_test_split(
+        indices,
+        test_size=val_ratio,
+        random_state=params.get("seed", 42),
+        stratify=targets,
+    )
+
+    train_ds = Subset(train_full, train_idx.tolist())
+    val_ds   = Subset(val_full, val_idx.tolist())
 
     train_loader = DataLoader(train_ds, batch_size=params["batch_size"],
                               shuffle=True,  num_workers=params["num_workers"])
@@ -411,7 +427,7 @@ def run_kd_training(
     scheduler = _make_scheduler(optimizer, params)
     val_criterion = nn.CrossEntropyLoss()
 
-    T     = params["kd_temperature"]
+    Temperature     = params["kd_temperature"]
     alpha = params["kd_alpha"]
 
     teacher.eval()
@@ -430,7 +446,7 @@ def run_kd_training(
                 teacher_logits = teacher(imgs)
             student_logits = student(imgs)
 
-            loss = distillation_loss(student_logits, teacher_logits, labels, T, alpha)
+            loss = distillation_loss(student_logits, teacher_logits, labels, temperature=Temperature, alpha=alpha)
 
             optimizer.zero_grad()
             loss.backward()
@@ -518,6 +534,8 @@ def run_teacher_prob_training(
     best_acc, best_weights = 0.0, None
     patience_counter, best_val_loss = 0, float("inf")
 
+    Temperature     = params["kd_temperature"]
+
     for epoch in range(1, params["epochs"] + 1):
         print(f"\nEpoch {epoch}/{params['epochs']}")
         student.train()
@@ -529,7 +547,7 @@ def run_teacher_prob_training(
             with torch.no_grad():
                 teacher_logits = teacher(imgs)
 
-            soft_labels = teacher_prob_soft_labels(teacher_logits, labels, nc)
+            soft_labels = teacher_prob_soft_labels(teacher_logits, labels, nc, temperature=Temperature)
             student_logits = student(imgs)
             loss = teacher_prob_loss(student_logits, soft_labels)
 
