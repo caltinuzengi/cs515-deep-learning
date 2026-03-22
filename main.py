@@ -171,7 +171,7 @@ def main():
     exp_dir = os.path.join(params["results_dir"], params["exp_name"])
     os.makedirs(exp_dir, exist_ok=True)
     params["results_dir"] = exp_dir
-    params["save_path"] = os.path.join(exp_dir, "best_model.pth")
+    params["save_path"] = os.path.join(exp_dir, f"{params["exp_name"]}_best_model.pth")
 
     set_seed(params["seed"])
     print(f"Seed set to: {params['seed']}")

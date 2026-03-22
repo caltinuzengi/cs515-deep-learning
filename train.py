@@ -193,7 +193,7 @@ def validate(
     return total_loss / n, correct / n
 
 
-def plot_training_history_png(history: dict, results_dir: str) -> None:
+def plot_training_history_png(history: dict, results_dir: str, exp_name: str) -> None:
     """Save training curves as a PNG image using matplotlib.
 
     Creates a figure with two subplots (loss and accuracy) and saves
@@ -203,6 +203,7 @@ def plot_training_history_png(history: dict, results_dir: str) -> None:
         history: Dictionary with keys ``train_loss``, ``val_loss``,
             ``train_acc``, ``val_acc``.
         results_dir: Directory where the PNG file is saved.
+        exp_name: Experiment name used for the file name.
     """
     os.makedirs(results_dir, exist_ok=True)
     epochs = range(1, len(history["train_loss"]) + 1)
@@ -226,7 +227,7 @@ def plot_training_history_png(history: dict, results_dir: str) -> None:
     ax2.grid(True, alpha=0.3)
 
     fig.tight_layout()
-    path = os.path.join(results_dir, "training_history.png")
+    path = os.path.join(results_dir, f"{exp_name}_training_history.png")
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  Training plots saved to {path}")
@@ -307,6 +308,8 @@ def run_training(model: nn.Module, params: dict, device: torch.device) -> dict:
                                      lr=params["learning_rate"],
                                      weight_decay=params["weight_decay"])
     
+    # optimizer = _make_optimizer(model, params)  # --- IGNORE ---
+    
     if params["lr_scheduler"] == "step":
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
     elif params["lr_scheduler"] == "cosine":
@@ -363,7 +366,7 @@ def run_training(model: nn.Module, params: dict, device: torch.device) -> dict:
     model.load_state_dict(best_weights)
     print(f"\nTraining done. Best val accuracy: {best_acc:.4f}")
 
-    plot_training_history_png(history, params["results_dir"])
+    plot_training_history_png(history, params["results_dir"], params["exp_name"])
     # plot_training_history(history, params["results_dir"])  # interactive HTML
     return history
 
@@ -428,14 +431,18 @@ def _run_student_loop(student: nn.Module,
             with torch.no_grad():
                 teacher_logits = teacher(imgs)
 
-            loss = compute_loss_fn(student, teacher_logits, labels)
+            # Create _logits for student and compute loss using the provided function
+            # To support both KD and teacher-prob, the compute_loss_fn will be defined differently in the caller, 
+            # but the loop structure remains the same.
+            student_logits = student(imgs)
+            loss = compute_loss_fn(student_logits, teacher_logits, labels)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             total_loss += loss.detach().item() * imgs.size(0)
-            correct    += student(imgs).argmax(1).eq(labels).sum().item()
+            correct    += student_logits.argmax(1).eq(labels).sum().item()
             n          += imgs.size(0)
 
             if (batch_idx + 1) % params["log_interval"] == 0:
@@ -475,7 +482,7 @@ def _run_student_loop(student: nn.Module,
             break
 
     student.load_state_dict(best_weights)
-    plot_training_history_png(history, params["results_dir"])
+    plot_training_history_png(history, params["results_dir"], params["exp_name"])
     return history
 
 
@@ -498,8 +505,8 @@ def run_kd_training(
     """
     from distillation import distillation_loss
 
-    history = {"train_loss": [], "train_acc": [],
-               "val_loss": [], "val_acc": [], "lr": []}
+    # history = {"train_loss": [], "train_acc": [],
+    #            "val_loss": [], "val_acc": [], "lr": []}
 
     # train_loader, val_loader = get_loaders(params)
     # optimizer = _make_optimizer(student, params)
@@ -516,7 +523,6 @@ def run_kd_training(
     history = _run_student_loop(student, teacher, params, device, compute_loss)
 
     print(f"\nKD Training done. Best val accuracy: {max(history['val_acc']):.4f}")
-    # plot_training_history_png(history, params["results_dir"])
     return history
 
 
@@ -543,8 +549,8 @@ def run_teacher_prob_training(
     """
     from distillation import teacher_prob_soft_labels, teacher_prob_loss
 
-    history = {"train_loss": [], "train_acc": [],
-               "val_loss": [], "val_acc": [], "lr": []}
+    # history = {"train_loss": [], "train_acc": [],
+    #            "val_loss": [], "val_acc": [], "lr": []}
 
     # train_loader, val_loader = get_loaders(params)
     # optimizer = _make_optimizer(student, params)
@@ -552,7 +558,7 @@ def run_teacher_prob_training(
     # val_criterion = nn.CrossEntropyLoss()
 
     nc = params["num_classes"]
-    teacher.eval()
+    # teacher.eval()
     # best_acc, best_weights = 0.0, None
     # patience_counter, best_val_loss = 0, float("inf")
 
@@ -567,5 +573,4 @@ def run_teacher_prob_training(
 
     # student.load_state_dict(best_weights)
     print(f"\nTeacher-prob Training done. Best val accuracy: {max(history['val_acc']):.4f}")
-    # plot_training_history_png(history, params["results_dir"])
     return history

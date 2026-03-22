@@ -50,7 +50,7 @@ def get_penultimate_layer(model: nn.Module, model_name: str) -> nn.Module:
 
 
 def plot_confusion_matrix(all_labels: torch.Tensor, all_preds: torch.Tensor,
-                          num_classes: int, results_dir: str) -> None:
+                          num_classes: int, results_dir: str, exp_name: str) -> None:
     """Save a confusion matrix heatmap as PNG.
 
     Args:
@@ -58,6 +58,7 @@ def plot_confusion_matrix(all_labels: torch.Tensor, all_preds: torch.Tensor,
         all_preds: Predicted labels.
         num_classes: Number of classes.
         results_dir: Directory where the PNG is saved.
+        exp_name: Experiment name used for the file name.
     """
     os.makedirs(results_dir, exist_ok=True)
     cm = confusion_matrix(all_labels.numpy(), all_preds.numpy(), labels=range(num_classes))
@@ -68,14 +69,14 @@ def plot_confusion_matrix(all_labels: torch.Tensor, all_preds: torch.Tensor,
     disp.plot(ax=ax, cmap=plt.cm.Blues, values_format="d")
     ax.set_title("Confusion Matrix")
     fig.tight_layout()
-    path = os.path.join(results_dir, "confusion_matrix.png")
+    path = os.path.join(results_dir, f"{exp_name}_confusion_matrix.png")
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  Confusion matrix saved to {path}")
 
 
 def plot_tsne(features: np.ndarray, labels: np.ndarray,
-              num_classes: int, results_dir: str) -> None:
+              num_classes: int, results_dir: str, exp_name: str) -> None:
     """Run t-SNE on hidden features and save a 2-D scatter plot as PNG.
 
     Args:
@@ -83,6 +84,7 @@ def plot_tsne(features: np.ndarray, labels: np.ndarray,
         labels: Ground-truth labels of shape ``(N,)``.
         num_classes: Number of classes (used for colour map).
         results_dir: Directory where the PNG is saved.
+        exp_name: Experiment name used for the file name.
     """
     os.makedirs(results_dir, exist_ok=True)
 
@@ -99,7 +101,7 @@ def plot_tsne(features: np.ndarray, labels: np.ndarray,
     ax.set_xlabel("t-SNE 1")
     ax.set_ylabel("t-SNE 2")
     fig.tight_layout()
-    path = os.path.join(results_dir, "tsne.png")
+    path = os.path.join(results_dir, f"{exp_name}_tsne.png")
     fig.savefig(path, dpi=150)
     plt.close(fig)
     print(f"  t-SNE plot saved to {path}")
@@ -176,8 +178,8 @@ def run_test(model: nn.Module, params: dict, device: torch.device) -> float:
 
     # --- Plots ---
     print("Generating confusion matrix...")
-    plot_confusion_matrix(all_labels, all_preds, params["num_classes"], params["results_dir"])
+    plot_confusion_matrix(all_labels, all_preds, params["num_classes"], params["results_dir"], params["exp_name"])
     print("Generating t-SNE plot...")
-    plot_tsne(all_features, all_labels.numpy(), params["num_classes"], params["results_dir"])
+    plot_tsne(all_features, all_labels.numpy(), params["num_classes"], params["results_dir"], params["exp_name"])
 
     return correct / n
