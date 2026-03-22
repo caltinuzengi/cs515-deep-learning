@@ -400,35 +400,18 @@ def _make_scheduler(optimizer, params: dict):
     return None
 
 
-def run_kd_training(
-    student: nn.Module,
-    teacher: nn.Module,
-    params: dict,
-    device: torch.device,
-) -> dict:
-    """Train *student* using standard knowledge distillation from *teacher*.
-
-    Args:
-        student: Student network to train.
-        teacher: Pre-trained teacher network (kept frozen).
-        params: Configuration dictionary.
-        device: Torch device.
-
-    Returns:
-        History dictionary with per-epoch metrics.
-    """
-    from distillation import distillation_loss
-
+def _run_student_loop(student: nn.Module,
+                      teacher: nn.Module,
+                      params: dict,
+                      device: torch.device,
+                      compute_loss_fn) -> dict:
+    """Shared loop structure for KD and teacher-prob training."""
     history = {"train_loss": [], "train_acc": [],
                "val_loss": [], "val_acc": [], "lr": []}
-
     train_loader, val_loader = get_loaders(params)
     optimizer = _make_optimizer(student, params)
     scheduler = _make_scheduler(optimizer, params)
     val_criterion = nn.CrossEntropyLoss()
-
-    Temperature     = params["kd_temperature"]
-    alpha = params["kd_alpha"]
 
     teacher.eval()
     best_acc, best_weights = 0.0, None
@@ -444,16 +427,15 @@ def run_kd_training(
 
             with torch.no_grad():
                 teacher_logits = teacher(imgs)
-            student_logits = student(imgs)
 
-            loss = distillation_loss(student_logits, teacher_logits, labels, temperature=Temperature, alpha=alpha)
+            loss = compute_loss_fn(student, teacher_logits, labels)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             total_loss += loss.detach().item() * imgs.size(0)
-            correct    += student_logits.argmax(1).eq(labels).sum().item()
+            correct    += student(imgs).argmax(1).eq(labels).sum().item()
             n          += imgs.size(0)
 
             if (batch_idx + 1) % params["log_interval"] == 0:
@@ -493,8 +475,48 @@ def run_kd_training(
             break
 
     student.load_state_dict(best_weights)
-    print(f"\nKD Training done. Best val accuracy: {best_acc:.4f}")
     plot_training_history_png(history, params["results_dir"])
+    return history
+
+
+def run_kd_training(
+    student: nn.Module,
+    teacher: nn.Module,
+    params: dict,
+    device: torch.device,
+) -> dict:
+    """Train *student* using standard knowledge distillation from *teacher*.
+
+    Args:
+        student: Student network to train.
+        teacher: Pre-trained teacher network (kept frozen).
+        params: Configuration dictionary.
+        device: Torch device.
+
+    Returns:
+        History dictionary with per-epoch metrics.
+    """
+    from distillation import distillation_loss
+
+    history = {"train_loss": [], "train_acc": [],
+               "val_loss": [], "val_acc": [], "lr": []}
+
+    # train_loader, val_loader = get_loaders(params)
+    # optimizer = _make_optimizer(student, params)
+    # scheduler = _make_scheduler(optimizer, params)
+    # val_criterion = nn.CrossEntropyLoss()
+
+    Temperature     = params["kd_temperature"]
+    alpha = params["kd_alpha"]
+
+    def compute_loss(student_logits, teacher_logits, labels):
+        return distillation_loss(student_logits, teacher_logits, labels, temperature=Temperature, alpha=alpha)
+
+    print(f"\nKD Training | T = {Temperature}, alpha = {alpha}")
+    history = _run_student_loop(student, teacher, params, device, compute_loss)
+
+    print(f"\nKD Training done. Best val accuracy: {max(history['val_acc']):.4f}")
+    # plot_training_history_png(history, params["results_dir"])
     return history
 
 
@@ -524,78 +546,26 @@ def run_teacher_prob_training(
     history = {"train_loss": [], "train_acc": [],
                "val_loss": [], "val_acc": [], "lr": []}
 
-    train_loader, val_loader = get_loaders(params)
-    optimizer = _make_optimizer(student, params)
-    scheduler = _make_scheduler(optimizer, params)
-    val_criterion = nn.CrossEntropyLoss()
+    # train_loader, val_loader = get_loaders(params)
+    # optimizer = _make_optimizer(student, params)
+    # scheduler = _make_scheduler(optimizer, params)
+    # val_criterion = nn.CrossEntropyLoss()
 
     nc = params["num_classes"]
     teacher.eval()
-    best_acc, best_weights = 0.0, None
-    patience_counter, best_val_loss = 0, float("inf")
+    # best_acc, best_weights = 0.0, None
+    # patience_counter, best_val_loss = 0, float("inf")
 
     Temperature     = params["kd_temperature"]
 
-    for epoch in range(1, params["epochs"] + 1):
-        print(f"\nEpoch {epoch}/{params['epochs']}")
-        student.train()
-        total_loss, correct, n = 0.0, 0, 0
+    def compute_loss(student_logits, teacher_logits, labels):
+        soft_labels = teacher_prob_soft_labels(teacher_logits, labels, num_classes=nc, temperature=Temperature)
+        return teacher_prob_loss(student_logits, soft_labels)
+    
+    print(f"\nTeacher-prob Training | T = {Temperature}")
+    history = _run_student_loop(student, teacher, params, device, compute_loss)
 
-        for batch_idx, (imgs, labels) in enumerate(train_loader):
-            imgs, labels = imgs.to(device), labels.to(device)
-
-            with torch.no_grad():
-                teacher_logits = teacher(imgs)
-
-            soft_labels = teacher_prob_soft_labels(teacher_logits, labels, nc, temperature=Temperature)
-            student_logits = student(imgs)
-            loss = teacher_prob_loss(student_logits, soft_labels)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            total_loss += loss.detach().item() * imgs.size(0)
-            correct    += student_logits.argmax(1).eq(labels).sum().item()
-            n          += imgs.size(0)
-
-            if (batch_idx + 1) % params["log_interval"] == 0:
-                print(f"  [{batch_idx+1}/{len(train_loader)}] "
-                      f"loss: {total_loss/n:.4f}  acc: {correct/n:.4f}")
-
-        tr_loss, tr_acc = total_loss / n, correct / n
-        val_loss, val_acc = validate(student, val_loader, val_criterion, device)
-
-        if params["lr_scheduler"] == "plateau":
-            scheduler.step(val_loss)
-        elif scheduler is not None:
-            scheduler.step()
-
-        print(f"  Train loss: {tr_loss:.4f}  acc: {tr_acc:.4f}")
-        print(f"  Val   loss: {val_loss:.4f}  acc: {val_acc:.4f}")
-
-        if val_acc > best_acc:
-            best_acc = val_acc
-            best_weights = copy.deepcopy(student.state_dict())
-            torch.save(best_weights, params["save_path"])
-            print(f"  Saved best model (val_acc={best_acc:.4f})")
-
-        history["train_loss"].append(tr_loss)
-        history["train_acc"].append(tr_acc)
-        history["val_loss"].append(val_loss)
-        history["val_acc"].append(val_acc)
-        history["lr"].append(optimizer.param_groups[0]["lr"])
-
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_counter = 0
-        else:
-            patience_counter += 1
-        if params["early_stop_patience"] > 0 and patience_counter >= params["early_stop_patience"]:
-            print(f"Early stopping at epoch {epoch}")
-            break
-
-    student.load_state_dict(best_weights)
-    print(f"\nTeacher-prob Training done. Best val accuracy: {best_acc:.4f}")
-    plot_training_history_png(history, params["results_dir"])
+    # student.load_state_dict(best_weights)
+    print(f"\nTeacher-prob Training done. Best val accuracy: {max(history['val_acc']):.4f}")
+    # plot_training_history_png(history, params["results_dir"])
     return history

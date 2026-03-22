@@ -1,3 +1,7 @@
 exp_name,model,training_mode,pretrained,transfer_strategy,label_smoothing,kd_temperature,kd_alpha,optimizer,lr_scheduler,learning_rate,weight_decay,epochs,best_val_acc,test_acc
 tl1_resnet_resize_frozen,resnet,standard,True,resize,0.0,3.0,0.7,adam,step,0.001,0.0001,10,0.8196,0.8051
 tl2_resnet_resize_finetune,resnet,standard,True,resize,0.0,3.0,0.7,adam,step,0.001,0.0001,10,0.9240,0.9245
+kd1_cnn_scratch,cnn,standard,False,none,0.0,3.0,0.7,adam,step,0.001,0.0001,10,0.6972,0.7029
+kd2_resnet_scratch,resnet,standard,False,none,0.0,3.0,0.7,adam,step,0.001,0.0001,10,0.8524,0.8491
+kd3_resnet_ls01,resnet,standard,False,none,0.1,3.0,0.7,adam,step,0.001,0.0001,10,0.8652,0.8572
+tl2a_resnet_resize_finetune,resnet,standard,True,resize,0.0,3.0,0.7,adam,step,0.0001,0.0001,10,0.9636,0.9565
