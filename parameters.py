@@ -98,6 +98,8 @@ class DistillationParams:
     training_mode: str = "standard"     # standard | distillation | teacher_prob
     teacher_path: str = ""              # Path to the teacher model for distillation
     teacher_model: str = "resnet"       # Architecture of the teacher model for distillation
+    teacher_pretrained: bool = False     # Whether to use pretrained weights for the teacher model in distillation
+    teacher_transfer_strategy: str = "none"  # Transfer strategy for the teacher model in distillation
     kd_temperature: float = 3.0         # Temperature for knowledge distillation
     kd_alpha: float = 0.7               # Alpha for balancing distillation loss and standard loss
     label_smoothing: float = 0.0        # Label smoothing factor (0.0 = no smoothing)
@@ -174,6 +176,11 @@ def get_params() -> dict:
     parser.add_argument("--resnet_layers", type=int, nargs="+", default=[2, 2, 2, 2],
                         help="Number of blocks per ResNet layer, e.g. 2 2 2 2 for ResNet-18.")
 
+    parser.add_argument("--teacher_pretrained", type=lambda v: v.lower() in ("true", "1", "yes"), default=False,
+                        help="Whether to use pretrained weights for the teacher model in distillation.")
+    parser.add_argument("--teacher_transfer_strategy", type=str, choices=["none", "resize", "modify_conv"], default="none",
+                        help="Transfer strategy for the teacher model in distillation.")
+
     args = parser.parse_args()
 
     # Dataset-dependent settings
@@ -231,6 +238,8 @@ def get_params() -> dict:
         training_mode=args.training_mode,
         teacher_path=args.teacher_path,
         teacher_model=args.teacher_model,
+        teacher_pretrained=args.teacher_pretrained,
+        teacher_transfer_strategy=args.teacher_transfer_strategy,
         kd_temperature=args.kd_temperature,
         kd_alpha=args.kd_alpha,
         label_smoothing=args.label_smoothing,

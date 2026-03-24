@@ -151,11 +151,13 @@ def _build_teacher(params: dict, device: torch.device) -> nn.Module:
     """Load a pre-trained teacher model from a checkpoint for KD."""
     teacher_params = dict(params)  
     teacher_params["model"] = params["teacher_model"]
-    teacher_params["pretrained"] = False          
-    teacher_params["transfer_strategy"] = "none"
+    teacher_params["pretrained"] = params.get("teacher_pretrained", False)          
+    teacher_params["transfer_strategy"] = params.get("teacher_transfer_strategy", "none")
 
     teacher = build_model(teacher_params).to(device)
     state = torch.load(params["teacher_path"], map_location=device)
+    if isinstance(state, dict) and "model_state_dict" in state:
+        state = state["model_state_dict"]
     teacher.load_state_dict(state)
     teacher.eval()
     for p in teacher.parameters():

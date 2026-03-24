@@ -13,3 +13,5 @@ kd5_cnn_distill_t3,cnn,distillation,False,none,0.0,3.0,0.7,adam,step,0.001,0.000
 kd6_cnn_distill_t5,cnn,distillation,False,none,0.0,5.0,0.7,adam,step,0.001,0.0001,10,0.6700,0.6664
 kd7_mobilenet_tprob_t3,mobilenet,teacher_prob,False,none,0.0,3.0,0.7,adam,step,0.001,0.0001,10,0.8346,0.8176
 kd8_mobilenet_tprob_t5,mobilenet,teacher_prob,False,none,0.0,5.0,0.7,adam,step,0.001,0.0001,10,0.8128,0.8026
+kd10_cnn_distill_tl3_t3,cnn,distillation,False,none,0.0,3.0,0.7,adam,step,0.001,0.0001,10,0.7036,0.6999
+kd11_cnn_distill_tl3_t5,cnn,distillation,False,none,0.0,5.0,0.7,adam,step,0.001,0.0001,10,0.6982,0.6905
