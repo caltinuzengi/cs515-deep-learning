@@ -1,20 +1,3 @@
-"""PGD adversarial attack implementation.
-
-Implements the Projected Gradient Descent (PGD) attack from Madry et al.
-for both L∞ and L2 norm constraints.
-
-Reference:
-    Madry et al., "Towards Deep Learning Models Resistant to Adversarial
-    Attacks", ICLR 2018.  https://openreview.net/forum?id=rJzIBfZAb
-
-Usage::
-
-    from attacks import PGDAttack
-
-    attacker = PGDAttack(model, norm="linf", eps=4/255, steps=20)
-    x_adv = attacker.perturb(x, y)   # x: normalized tensor (B,C,H,W)
-"""
-
 from __future__ import annotations
 
 import torch
@@ -23,17 +6,6 @@ import torch.nn as nn
 
 class PGDAttack:
     """Projected Gradient Descent adversarial attack.
-
-    Supports L∞ and L2 norm constraints.  Step size defaults to the Madry
-    formula ``2.5 * eps / steps``, which is well-calibrated for PGD-20.
-
-    The attack operates entirely in the *normalized* input space — the same
-    space that the model expects.  The perturbation ``delta`` is constrained
-    to ``[-eps, eps]`` (L∞) or ``‖delta‖₂ ≤ eps`` (L2), and the adversarial
-    example is not clamped to ``[0, 1]`` because the input may lie outside
-    that range after normalization.  This is the standard approach when the
-    model is wrapped with dataset-specific normalization.
-
     Args:
         model: The target model to attack.  Must be callable with a batch of
             tensors and return logits.
@@ -72,9 +44,6 @@ class PGDAttack:
 
     def perturb(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Generate adversarial examples for a batch of inputs.
-
-        The model is kept in ``eval()`` mode throughout.  Gradients are only
-        computed with respect to the input, not the model parameters.
 
         Args:
             x: Clean input batch of shape ``(B, C, H, W)``, already
@@ -122,8 +91,7 @@ class PGDAttack:
         return (x + delta).detach()
 
     def _project_linf(self, delta: torch.Tensor, eps: float) -> torch.Tensor:
-        """Project *delta* onto the L∞ ball of radius *eps*.
-
+        """
         Args:
             delta: Perturbation tensor of any shape.
             eps: L∞ radius.
@@ -134,10 +102,7 @@ class PGDAttack:
         return delta.clamp(-eps, eps)
 
     def _project_l2(self, delta: torch.Tensor, eps: float) -> torch.Tensor:
-        """Project *delta* onto the L2 ball of radius *eps* per sample.
-
-        Each sample in the batch is projected independently.
-
+        """
         Args:
             delta: Perturbation tensor of shape ``(B, ...)``.
             eps: L2 radius.

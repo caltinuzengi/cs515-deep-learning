@@ -1,24 +1,3 @@
-"""AugMix data augmentation.
-
-Implements AugMix as a torchvision-compatible PIL transform.
-Applied as a drop-in replacement inside ``get_transforms()``
-before ``ToTensor()`` so it composes naturally with any
-existing pipeline.
-
-Reference:
-    Hendrycks et al., "AugMix: A Simple Method to Improve Robustness and
-    Uncertainty under Data Shift", ICLR 2020.
-    https://openreview.net/forum?id=S1gmrxHFvB
-
-Note:
-    This implementation uses AugMix purely as a data-augmentation strategy
-    (pixel mixing).  The optional Jensen-Shannon Divergence (JSD) consistency
-    loss from the original paper is **not** included.  The training loop
-    remains a standard cross-entropy loop, which simplifies integration with
-    the existing codebase.  Ablation experiments suggest the pixel-mixing
-    component alone provides meaningful robustness gains.
-"""
-
 from __future__ import annotations
 
 import random
@@ -26,12 +5,6 @@ from typing import Callable
 
 import numpy as np
 from PIL import Image, ImageOps, ImageEnhance
-
-
-# ---------------------------------------------------------------------------
-# Low-level augmentation operations (PIL → PIL)
-# All ops accept a PIL image and a severity in [0.1, 1.0].
-# ---------------------------------------------------------------------------
 
 def _autocontrast(img: Image.Image, _severity: float) -> Image.Image:
     return ImageOps.autocontrast(img)
@@ -131,9 +104,9 @@ _AUGMENT_OPS: list[Callable[[Image.Image, float], Image.Image]] = [
 ]
 
 
-# ---------------------------------------------------------------------------
+######################
 # AugMix transform
-# ---------------------------------------------------------------------------
+######################
 
 class AugMix:
     """AugMix data augmentation as a PIL-compatible transform.
@@ -155,18 +128,6 @@ class AugMix:
             ``[1, 3]`` for each chain independently.
         alpha: Concentration parameter for both the Dirichlet (chain
             weights) and Beta (original vs. mixture weight) distributions.
-
-    Example::
-
-        from augmentation import AugMix
-        from torchvision import transforms
-
-        tf = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            AugMix(severity=3, width=3),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std),
-        ])
     """
 
     def __init__(

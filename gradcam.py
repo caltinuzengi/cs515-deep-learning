@@ -1,9 +1,3 @@
-"""Grad-CAM (Gradient-weighted Class Activation Mapping) implementation.
-
-Reference: Selvaraju et al., "Grad-CAM: Visual Explanations from Deep Networks
-via Gradient-based Localization", ICCV 2017.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -33,9 +27,9 @@ class GradCAM:
         self._fwd_handle = target_layer.register_forward_hook(self._save_activations)
         self._bwd_handle = target_layer.register_full_backward_hook(self._save_gradients)
 
-    # ------------------------------------------------------------------
+    ############
     # Hooks
-    # ------------------------------------------------------------------
+    ############
 
     def _save_activations(
         self,
@@ -43,7 +37,6 @@ class GradCAM:
         input: tuple[Tensor, ...],
         output: Tensor,
     ) -> None:
-        """Forward hook — stores the layer output (detached)."""
         self._activations = output.detach()
 
     def _save_gradients(
@@ -52,12 +45,11 @@ class GradCAM:
         grad_input: tuple[Tensor, ...],
         grad_output: tuple[Tensor, ...],
     ) -> None:
-        """Backward hook — stores the gradient w.r.t. the layer output."""
         self._gradients = grad_output[0].detach()
 
-    # ------------------------------------------------------------------
+    ############
     # Core
-    # ------------------------------------------------------------------
+    ############
 
     def __call__(self, x: Tensor, class_idx: int | None = None) -> np.ndarray:
         """Compute the Grad-CAM map for a single input image.
@@ -112,9 +104,9 @@ class GradCAM:
 
         return cam_np
 
-    # ------------------------------------------------------------------
+    ############
     # Visualisation helper
-    # ------------------------------------------------------------------
+    ############
 
     @staticmethod
     def overlay(img: np.ndarray, cam: np.ndarray, alpha: float = 0.5) -> np.ndarray:
@@ -138,19 +130,18 @@ class GradCAM:
         blended = (1.0 - alpha) * img_f + alpha * heat_f
         return np.clip(blended, 0, 255).astype(np.uint8)
 
-    # ------------------------------------------------------------------
+    ############
     # Cleanup
-    # ------------------------------------------------------------------
+    ############
 
     def remove_hooks(self) -> None:
-        """Remove the registered forward and backward hooks."""
         self._fwd_handle.remove()
         self._bwd_handle.remove()
 
 
-# ---------------------------------------------------------------------------
+######################
 # Convenience helper
-# ---------------------------------------------------------------------------
+#######################
 
 
 def get_target_layer(model: nn.Module, model_name: str) -> nn.Module:

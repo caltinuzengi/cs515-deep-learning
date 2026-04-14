@@ -183,10 +183,6 @@ def load_cifar10c(
 
     Returns:
         A DataLoader over the 10 000 corrupted test images at the given severity.
-
-    Raises:
-        ValueError: If ``corruption_type`` is unknown or ``severity`` is out of range.
-        FileNotFoundError: If the CIFAR-10-C directory or .npy file is missing.
     """
     if corruption_type not in CIFAR10C_CORRUPTIONS:
         raise ValueError(
