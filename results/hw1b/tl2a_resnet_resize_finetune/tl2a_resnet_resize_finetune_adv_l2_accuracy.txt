@@ -1,0 +1,4 @@
+norm=l2  eps=0.250000  steps=20  n_samples=200
+clean_acc=0.9550
+adv_acc=0.8150
+accuracy_drop=0.1400

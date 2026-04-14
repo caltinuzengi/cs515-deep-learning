@@ -614,3 +614,307 @@ def run_tsne_adversarial(
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"  t-SNE adversarial plot saved to {out_path}")
+
+
+def run_combined_adv_eval(
+    model: nn.Module,
+    params: dict,
+    attack: PGDAttack,
+    device: torch.device,
+    n_gradcam: int = 2,
+) -> tuple[float, float]:
+    """Run adversarial accuracy, Grad-CAM, and t-SNE in a single PGD pass.
+
+    Generates adversarial examples exactly once and reuses them for all three
+    analyses, avoiding redundant PGD computation.  Produces three output files:
+
+    * ``{exp_name}_adv_{norm}_accuracy.txt``  — clean and adversarial accuracy
+    * ``{exp_name}_adv_{norm}_gradcam.png``   — clean vs. adversarial Grad-CAM
+    * ``{exp_name}_adv_{norm}_tsne.png``      — t-SNE of clean (o) and adv (x)
+
+    Args:
+        model: Trained model (weights loaded from ``params['save_path']``).
+        params: Configuration dict.  Uses ``attack_n_samples``, ``batch_size``,
+            ``model``, ``results_dir``, ``exp_name``, ``attack_norm``,
+            ``attack_eps``, ``attack_steps``.
+        attack: Pre-configured ``PGDAttack`` instance.
+        device: Torch device.
+        n_gradcam: Number of misclassified adversarial examples to visualise
+            with Grad-CAM (HW requires 1-2).
+
+    Returns:
+        Tuple ``(clean_acc, adv_acc)``.
+    """
+    _load_weights(model, params["save_path"], device)
+
+    n_samples = params["attack_n_samples"]
+    norm_str  = params["attack_norm"]
+    tf = get_transforms(params, train=False)
+    if params["dataset"] == "mnist":
+        test_ds = datasets.MNIST(params["data_dir"], train=False, download=True, transform=tf)
+    else:
+        test_ds = datasets.CIFAR10(params["data_dir"], train=False, download=True, transform=tf)
+
+    subset = Subset(test_ds, range(min(n_samples, len(test_ds))))
+    loader = DataLoader(subset, batch_size=params["batch_size"], shuffle=False,
+                        num_workers=params["num_workers"])
+
+    # --- Hook for penultimate features (t-SNE) ---
+    penultimate = get_penultimate_layer(model, params["model"])
+    feat_store: list[torch.Tensor] = []
+
+    def _feat_hook(_mod, _inp, out):
+        f = out.detach().cpu()
+        if f.dim() > 2:
+            f = f.view(f.size(0), -1)
+        feat_store.append(f)
+
+    hook_handle = penultimate.register_forward_hook(_feat_hook)
+
+    # --- GradCAM setup ---
+    target_layer = get_target_layer(model, params["model"])
+    gc = GradCAM(model, target_layer)
+    class_names = CIFAR10_CLASSES if params["dataset"] == "cifar10" else [str(i) for i in range(10)]
+
+    # --- Accumulators ---
+    clean_correct = adv_correct = total = 0
+    clean_feats: list[torch.Tensor] = []
+    adv_feats:   list[torch.Tensor] = []
+    all_labels:  list[torch.Tensor] = []
+    # GradCAM candidates: (clean_img_np, cam_clean_overlay, adv_img_np, cam_adv_overlay, true_name, adv_name)
+    gradcam_collected: list[tuple] = []
+    # store single-image tensors for deferred GradCAM after loop
+    gradcam_candidates: list[tuple] = []  # (img_1hw, x_adv_1hw, true_cls, adv_pred)
+
+    print(f"\n=== Combined Adversarial Eval ({norm_str.upper()}, "
+          f"\u03b5={params['attack_eps']:.5f}, steps={params['attack_steps']}, n={n_samples}) ===")
+
+    for imgs, labels in loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+
+        # --- Clean forward ---
+        feat_store.clear()
+        with torch.no_grad():
+            clean_logits = model(imgs)
+        clean_preds = clean_logits.argmax(1)
+        clean_correct += clean_preds.eq(labels).sum().item()
+        clean_feats.append(torch.cat(feat_store).clone())
+        all_labels.append(labels.cpu())
+
+        # --- PGD (one call per batch) ---
+        x_adv = attack.perturb(imgs, labels)
+
+        # --- Adv forward ---
+        feat_store.clear()
+        with torch.no_grad():
+            adv_logits = model(x_adv)
+        adv_preds = adv_logits.argmax(1)
+        adv_correct += adv_preds.eq(labels).sum().item()
+        adv_feats.append(torch.cat(feat_store).clone())
+
+        total += labels.size(0)
+
+        # --- Collect GradCAM candidates (process per sample) ---
+        if len(gradcam_candidates) < n_gradcam:
+            for i in range(imgs.size(0)):
+                if len(gradcam_candidates) >= n_gradcam:
+                    break
+                if clean_preds[i].item() == labels[i].item() and adv_preds[i].item() != labels[i].item():
+                    gradcam_candidates.append((
+                        imgs[i:i+1].detach(),
+                        x_adv[i:i+1].detach(),
+                        labels[i].item(),
+                        adv_preds[i].item(),
+                    ))
+
+    hook_handle.remove()
+
+    clean_acc = clean_correct / total
+    adv_acc   = adv_correct   / total
+    print(f"  Clean accuracy : {clean_acc:.4f}  ({clean_correct}/{total})")
+    print(f"  Adv   accuracy : {adv_acc:.4f}  ({adv_correct}/{total})")
+    print(f"  Accuracy drop  : {clean_acc - adv_acc:.4f}")
+
+    os.makedirs(params["results_dir"], exist_ok=True)
+    prefix = os.path.join(params["results_dir"], f"{params['exp_name']}_adv_{norm_str}")
+
+    # --- Save accuracy ---
+    with open(f"{prefix}_accuracy.txt", "w") as f:
+        f.write(f"norm={norm_str}  eps={params['attack_eps']:.6f}  "
+                f"steps={params['attack_steps']}  n_samples={n_samples}\n")
+        f.write(f"clean_acc={clean_acc:.4f}\n")
+        f.write(f"adv_acc={adv_acc:.4f}\n")
+        f.write(f"accuracy_drop={clean_acc - adv_acc:.4f}\n")
+    print(f"  Accuracy results saved to {prefix}_accuracy.txt")
+
+    # --- GradCAM visualisation ---
+    for img_t, adv_t, true_cls, adv_pred in gradcam_candidates:
+        img_t = img_t.to(device)
+        adv_t = adv_t.to(device)
+        cam_c = gc(img_t, class_idx=true_cls)
+        cam_a = gc(adv_t, class_idx=adv_pred)
+        clean_np = _denorm(img_t.squeeze(0).cpu())
+        adv_np   = _denorm(adv_t.squeeze(0).cpu())
+        gradcam_collected.append((
+            clean_np, GradCAM.overlay(clean_np, cam_c),
+            adv_np,   GradCAM.overlay(adv_np,   cam_a),
+            class_names[true_cls], class_names[adv_pred],
+        ))
+    gc.remove_hooks()
+
+    if gradcam_collected:
+        n_found = len(gradcam_collected)
+        fig, axes = plt.subplots(n_found, 4, figsize=(14, 3.5 * n_found))
+        if n_found == 1:
+            axes = axes[np.newaxis, :]
+        col_titles = ["Clean image", "Clean Grad-CAM", "Adv image", "Adv Grad-CAM"]
+        for col, title in enumerate(col_titles):
+            axes[0, col].set_title(title, fontsize=11, fontweight="bold")
+        for row, (cimg, ccam, aimg, acam, tname, aname) in enumerate(gradcam_collected):
+            for col, im in enumerate([cimg, ccam, aimg, acam]):
+                axes[row, col].imshow(im)
+                axes[row, col].axis("off")
+            axes[row, 0].set_ylabel(f"true: {tname}\npred_adv: {aname}",
+                                    fontsize=9, rotation=0, labelpad=70, va="center")
+        fig.suptitle(f"Grad-CAM: Clean vs Adversarial ({norm_str.upper()}, "
+                     f"\u03b5={params['attack_eps']:.4f})\nModel: {params['exp_name']}",
+                     fontsize=12)
+        fig.tight_layout()
+        fig.savefig(f"{prefix}_gradcam.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Grad-CAM saved to {prefix}_gradcam.png  ({n_found} examples)")
+    else:
+        print("  No qualifying examples for Grad-CAM found.")
+
+    # --- t-SNE ---
+    clean_np_f  = torch.cat(clean_feats).numpy()
+    adv_np_f    = torch.cat(adv_feats).numpy()
+    labels_np   = torch.cat(all_labels).numpy()
+    combined_f  = np.concatenate([clean_np_f, adv_np_f], axis=0)
+    N = len(labels_np)
+
+    print("  Running t-SNE...")
+    tsne = TSNE(n_components=2, perplexity=min(30, N - 1), random_state=42, init="pca")
+    emb  = tsne.fit_transform(combined_f)
+    emb_c, emb_a = emb[:N], emb[N:]
+
+    import matplotlib.lines as mlines
+    cmap = plt.get_cmap("tab10")
+    num_classes = params["num_classes"]
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for cls in range(num_classes):
+        mask  = labels_np == cls
+        color = cmap(cls / max(num_classes - 1, 1))
+        ax.scatter(emb_c[mask, 0], emb_c[mask, 1], color=color, marker="o", s=8, alpha=0.5)
+        ax.scatter(emb_a[mask, 0], emb_a[mask, 1], color=color, marker="x", s=8, alpha=0.5)
+
+    class_handles = [
+        mlines.Line2D([], [], color=cmap(c / max(num_classes-1, 1)), marker="o",
+                      linestyle="None", markersize=6,
+                      label=CIFAR10_CLASSES[c] if params["dataset"] == "cifar10" else str(c))
+        for c in range(num_classes)
+    ]
+    type_handles = [
+        mlines.Line2D([], [], color="gray", marker="o", linestyle="None",
+                      markersize=7, label="clean (o)"),
+        mlines.Line2D([], [], color="gray", marker="x", linestyle="None",
+                      markersize=7, label="adversarial (x)"),
+    ]
+    ax.legend(handles=class_handles + type_handles, title="Class / Type",
+              loc="best", fontsize=7, ncol=2)
+    ax.set_title(f"t-SNE: Clean (o) vs Adversarial (x) \u2014 {norm_str.upper()}, "
+                 f"\u03b5={params['attack_eps']:.4f}\nModel: {params['exp_name']}", fontsize=11)
+    ax.set_xlabel("t-SNE 1")
+    ax.set_ylabel("t-SNE 2")
+    fig.tight_layout()
+    fig.savefig(f"{prefix}_tsne.png", dpi=150)
+    plt.close(fig)
+    print(f"  t-SNE saved to {prefix}_tsne.png")
+
+    return clean_acc, adv_acc
+
+
+def run_transferability_eval(
+    student: nn.Module,
+    teacher: nn.Module,
+    params: dict,
+    attack: PGDAttack,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Test adversarial transferability: craft examples on teacher, evaluate on student.
+
+    Generates PGD adversarial examples using *teacher* as the surrogate model,
+    then measures how well these examples fool the *student* model.  Both
+    student and teacher must already have weights loaded before calling this
+    function.
+
+    Output file: ``{exp_name}_adv_{norm}_transferability.txt``
+
+    Args:
+        student: Student model with weights loaded, in eval mode.
+        teacher: Teacher (surrogate) model with weights loaded, in eval mode.
+        params: Configuration dict.  Uses ``attack_n_samples``, ``batch_size``,
+            ``results_dir``, ``exp_name``, ``attack_norm``, ``attack_eps``,
+            ``attack_steps``.
+        attack: Pre-configured ``PGDAttack`` whose ``model`` attribute points
+            to the *teacher*.  The attack will be moved to eval mode inside.
+        device: Torch device.
+
+    Returns:
+        Tuple ``(student_clean_acc, student_adv_trans_acc)``.
+    """
+    n_samples = params["attack_n_samples"]
+    norm_str  = params["attack_norm"]
+    tf = get_transforms(params, train=False)
+    if params["dataset"] == "mnist":
+        test_ds = datasets.MNIST(params["data_dir"], train=False, download=True, transform=tf)
+    else:
+        test_ds = datasets.CIFAR10(params["data_dir"], train=False, download=True, transform=tf)
+
+    subset = Subset(test_ds, range(min(n_samples, len(test_ds))))
+    loader = DataLoader(subset, batch_size=params["batch_size"], shuffle=False,
+                        num_workers=params["num_workers"])
+
+    clean_correct = trans_correct = total = 0
+
+    print(f"\n=== Adversarial Transferability ({norm_str.upper()}, "
+          f"\u03b5={params['attack_eps']:.5f}, steps={params['attack_steps']}, n={n_samples}) ===")
+    print("  Crafting on teacher, evaluating on student...")
+
+    for imgs, labels in loader:
+        imgs, labels = imgs.to(device), labels.to(device)
+
+        # Student clean accuracy
+        with torch.no_grad():
+            clean_preds = student(imgs).argmax(1)
+        clean_correct += clean_preds.eq(labels).sum().item()
+
+        # Craft adversarial examples on teacher
+        x_adv = attack.perturb(imgs, labels)
+
+        # Evaluate on student
+        with torch.no_grad():
+            trans_preds = student(x_adv).argmax(1)
+        trans_correct += trans_preds.eq(labels).sum().item()
+
+        total += labels.size(0)
+
+    clean_acc = clean_correct / total
+    trans_acc = trans_correct / total
+    print(f"  Student clean accuracy          : {clean_acc:.4f}  ({clean_correct}/{total})")
+    print(f"  Student accuracy (teacher adv)  : {trans_acc:.4f}  ({trans_correct}/{total})")
+    print(f"  Transferability drop            : {clean_acc - trans_acc:.4f}")
+
+    os.makedirs(params["results_dir"], exist_ok=True)
+    out_path = os.path.join(params["results_dir"],
+                            f"{params['exp_name']}_adv_{norm_str}_transferability.txt")
+    with open(out_path, "w") as f:
+        f.write(f"norm={norm_str}  eps={params['attack_eps']:.6f}  "
+                f"steps={params['attack_steps']}  n_samples={n_samples}\n")
+        f.write("[teacher adv samples evaluated on student]\n")
+        f.write(f"student_clean_acc={clean_acc:.4f}\n")
+        f.write(f"student_adv_transfer_acc={trans_acc:.4f}\n")
+        f.write(f"transferability_drop={clean_acc - trans_acc:.4f}\n")
+    print(f"  Results saved to {out_path}")
+
+    return clean_acc, trans_acc

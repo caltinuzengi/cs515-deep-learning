@@ -21,6 +21,8 @@ from test  import (
     run_adversarial_eval,
     run_gradcam_viz,
     run_tsne_adversarial,
+    run_combined_adv_eval,
+    run_transferability_eval,
 )
 from attacks import PGDAttack
 
@@ -209,7 +211,7 @@ def main():
     eval_mode = params.get("eval_mode", "standard")
     if eval_mode != "standard":
         attack: PGDAttack | None = None
-        if eval_mode in ("adversarial", "gradcam", "tsne_adv"):
+        if eval_mode in ("adversarial", "gradcam", "tsne_adv", "combined_adv", "transferability"):
             attack = PGDAttack(
                 model=model,
                 norm=params["attack_norm"],
@@ -227,6 +229,23 @@ def main():
             run_gradcam_viz(model, params, attack, device)
         elif eval_mode == "tsne_adv":
             run_tsne_adversarial(model, params, attack, device)
+        elif eval_mode == "combined_adv":
+            run_combined_adv_eval(model, params, attack, device)
+        elif eval_mode == "transferability":
+            # Teacher attack — craft adv on teacher, evaluate on student (model)
+            teacher = _build_teacher(params, device)
+            teacher_attack = PGDAttack(
+                model=teacher,
+                norm=params["attack_norm"],
+                eps=params["attack_eps"],
+                steps=params["attack_steps"],
+                step_size=params["attack_step_size"],
+                random_start=params["attack_random_start"],
+            )
+            # Load student weights
+            from test import _load_weights
+            _load_weights(model, params["save_path"], device)
+            run_transferability_eval(model, teacher, params, teacher_attack, device)
         else:
             print(f"Unknown eval_mode: '{eval_mode}'")
         return

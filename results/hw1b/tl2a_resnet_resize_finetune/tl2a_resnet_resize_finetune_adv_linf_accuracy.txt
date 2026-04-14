@@ -1,0 +1,4 @@
+norm=linf  eps=0.015690  steps=20  n_samples=200
+clean_acc=0.9550
+adv_acc=0.0000
+accuracy_drop=0.9550

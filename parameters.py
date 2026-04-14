@@ -124,8 +124,8 @@ class AttackParams:
     attack_steps: int = 20             # PGD iterations
     attack_step_size: float = -1.0     # ≤0 → auto: 2.5 * eps / steps
     attack_random_start: bool = True   # random initialisation inside ε-ball
-    attack_n_samples: int = 1000       # subset size for adversarial evaluation
-    eval_mode: str = "standard"        # standard | corruption | adversarial | gradcam | tsne_adv | transferability
+    attack_n_samples: int = 200        # subset size for adversarial evaluation
+    eval_mode: str = "standard"        # standard | corruption | adversarial | gradcam | tsne_adv | combined_adv | transferability
 
 
 # ---------------------------------------------------------------------------
@@ -210,10 +210,11 @@ def get_params() -> dict:
                         help="Number of PGD iterations.")
     parser.add_argument("--attack_step_size", type=float, default=-1.0,
                         help="PGD step size. <=0 uses Madry formula: 2.5*eps/steps.")
-    parser.add_argument("--attack_n_samples", type=int, default=1000,
+    parser.add_argument("--attack_n_samples", type=int, default=200,
                         help="Number of test samples to use for adversarial evaluation.")
     parser.add_argument("--eval_mode", type=str,
-                        choices=["standard", "corruption", "adversarial", "gradcam", "tsne_adv", "transferability"],
+                        choices=["standard", "corruption", "adversarial", "gradcam",
+                                 "tsne_adv", "combined_adv", "transferability"],
                         default="standard",
                         help="Evaluation mode for test-time dispatch.")
 
