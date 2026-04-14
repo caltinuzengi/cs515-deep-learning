@@ -15,7 +15,14 @@ from models.ResNet import ResNet, BasicBlock
 from models.VGG import VGG
 from models.mobilenet import MobileNetV2
 from train import run_training, run_kd_training, run_teacher_prob_training
-from test  import run_test
+from test  import (
+    run_test,
+    run_corruption_eval,
+    run_adversarial_eval,
+    run_gradcam_viz,
+    run_tsne_adversarial,
+)
+from attacks import PGDAttack
 
 
 def set_seed(seed: int) -> None:
@@ -197,6 +204,32 @@ def main():
 
     model = build_model(params).to(device)
     print(model)
+
+    # ── Eval-mode dispatch (HW2) ──
+    eval_mode = params.get("eval_mode", "standard")
+    if eval_mode != "standard":
+        attack: PGDAttack | None = None
+        if eval_mode in ("adversarial", "gradcam", "tsne_adv"):
+            attack = PGDAttack(
+                model=model,
+                norm=params["attack_norm"],
+                eps=params["attack_eps"],
+                steps=params["attack_steps"],
+                step_size=params["attack_step_size"],
+                random_start=params["attack_random_start"],
+            )
+
+        if eval_mode == "corruption":
+            run_corruption_eval(model, params, device)
+        elif eval_mode == "adversarial":
+            run_adversarial_eval(model, params, attack, device)
+        elif eval_mode == "gradcam":
+            run_gradcam_viz(model, params, attack, device)
+        elif eval_mode == "tsne_adv":
+            run_tsne_adversarial(model, params, attack, device)
+        else:
+            print(f"Unknown eval_mode: '{eval_mode}'")
+        return
 
     # ── Training dispatch ──
     training_mode = params.get("training_mode", "standard")

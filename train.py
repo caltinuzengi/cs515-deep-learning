@@ -15,8 +15,10 @@ import torch.nn as nn
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Subset
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
+from augmentation import AugMix
 
 
 def get_transforms(params: dict, train: bool = True) -> transforms.Compose:
@@ -31,6 +33,7 @@ def get_transforms(params: dict, train: bool = True) -> transforms.Compose:
     """
     mean, std = params["mean"], params["std"]
     strategy = params.get("transfer_strategy", "none")
+    use_augmix = params.get("use_augmix", False) and train
 
     if params["dataset"] == "mnist":
         return transforms.Compose([
@@ -43,13 +46,18 @@ def get_transforms(params: dict, train: bool = True) -> transforms.Compose:
         imagenet_mean = (0.485, 0.456, 0.406)
         imagenet_std  = (0.229, 0.224, 0.225)
         if train:
-            return transforms.Compose([
+            base = [
                 transforms.Resize(224),
                 transforms.RandomCrop(224, padding=8),
                 transforms.RandomHorizontalFlip(),
+            ]
+            if use_augmix:
+                base.append(AugMix())
+            base += [
                 transforms.ToTensor(),
                 transforms.Normalize(imagenet_mean, imagenet_std),
-            ])
+            ]
+            return transforms.Compose(base)
         else:
             return transforms.Compose([
                 transforms.Resize(224),
@@ -59,12 +67,17 @@ def get_transforms(params: dict, train: bool = True) -> transforms.Compose:
 
     # CIFAR-10 native (32×32)
     if train:
-        return transforms.Compose([
+        base = [
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
+        ]
+        if use_augmix:
+            base.append(AugMix())
+        base += [
             transforms.ToTensor(),
             transforms.Normalize(mean, std),
-        ])
+        ]
+        return transforms.Compose(base)
     else:
         return transforms.Compose([
             transforms.ToTensor(),
@@ -111,6 +124,103 @@ def get_loaders(params: dict) -> tuple[DataLoader, DataLoader]:
                               shuffle=False, num_workers=params["num_workers"])
     return train_loader, val_loader
 
+
+# ---------------------------------------------------------------------------
+# CIFAR-10-C helpers
+# ---------------------------------------------------------------------------
+
+CIFAR10C_CORRUPTIONS: list[str] = [
+    "gaussian_noise", "shot_noise", "impulse_noise",
+    "defocus_blur", "glass_blur", "motion_blur", "zoom_blur",
+    "snow", "frost", "fog", "brightness", "contrast",
+    "elastic_transform", "pixelate", "jpeg_compression",
+    "speckle_noise", "gaussian_blur", "spatter", "saturate",
+]
+
+
+class CIFAR10CDataset(Dataset):
+    """PyTorch Dataset wrapper for CIFAR-10-C numpy arrays.
+
+    Args:
+        images: Uint8 numpy array of shape ``(N, 32, 32, 3)``.
+        labels: Int64 numpy array of shape ``(N,)``.
+        transform: Optional torchvision transform applied to each image.
+    """
+
+    def __init__(
+        self,
+        images: np.ndarray,
+        labels: np.ndarray,
+        transform: transforms.Compose | None = None,
+    ) -> None:
+        self.images = images
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        img = Image.fromarray(self.images[idx])
+        if self.transform:
+            img = self.transform(img)
+        return img, int(self.labels[idx])
+
+
+def load_cifar10c(
+    params: dict,
+    corruption_type: str,
+    severity: int,
+) -> DataLoader:
+    """Create a DataLoader for one corruption type and severity level from CIFAR-10-C.
+
+    Args:
+        params: Configuration dictionary (needs ``cifar10c_dir``, ``mean``, ``std``,
+            ``batch_size``, ``num_workers``).
+        corruption_type: One of the 19 CIFAR-10-C corruption types, e.g.
+            ``"gaussian_noise"``.
+        severity: Corruption severity level, integer in ``[1, 5]``.
+
+    Returns:
+        A DataLoader over the 10 000 corrupted test images at the given severity.
+
+    Raises:
+        ValueError: If ``corruption_type`` is unknown or ``severity`` is out of range.
+        FileNotFoundError: If the CIFAR-10-C directory or .npy file is missing.
+    """
+    if corruption_type not in CIFAR10C_CORRUPTIONS:
+        raise ValueError(
+            f"Unknown corruption type '{corruption_type}'. "
+            f"Choose from: {CIFAR10C_CORRUPTIONS}"
+        )
+    if not (1 <= severity <= 5):
+        raise ValueError(f"severity must be in [1, 5], got {severity}.")
+
+    cifar10c_dir = params["cifar10c_dir"]
+    images_path = os.path.join(cifar10c_dir, f"{corruption_type}.npy")
+    labels_path = os.path.join(cifar10c_dir, "labels.npy")
+
+    if not os.path.isfile(images_path):
+        raise FileNotFoundError(f"CIFAR-10-C file not found: {images_path}")
+    if not os.path.isfile(labels_path):
+        raise FileNotFoundError(f"CIFAR-10-C labels file not found: {labels_path}")
+
+    all_images = np.load(images_path)   # (50000, 32, 32, 3), uint8
+    all_labels = np.load(labels_path)   # (50000,), int64
+
+    start = (severity - 1) * 10_000
+    end   = severity * 10_000
+    images = all_images[start:end]
+    labels = all_labels[start:end]
+
+    tf = get_transforms(params, train=False)
+    dataset = CIFAR10CDataset(images, labels, transform=tf)
+    return DataLoader(
+        dataset,
+        batch_size=params["batch_size"],
+        shuffle=False,
+        num_workers=params["num_workers"],
+    )
 
 def train_one_epoch(
     model: nn.Module,

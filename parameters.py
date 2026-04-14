@@ -30,6 +30,7 @@ class DataParams:
     val_ratio: float
     mean: tuple[float, ...]
     std: tuple[float, ...]
+    cifar10c_dir: str = ""
 
 
 @dataclass
@@ -65,6 +66,7 @@ class TrainParams:
     optimizer: str = "adam"
     early_stop_patience: int = 5
     log_interval: int = 100
+    use_augmix: bool = False
 
 
 @dataclass
@@ -113,6 +115,18 @@ class DistillationParams:
             raise ValueError(f"kd_temperature must be greater than 0.0. Got: {self.kd_temperature}")
 
 
+@dataclass
+class AttackParams:
+    """Adversarial attack settings."""
+
+    attack_norm: str = "linf"          # linf | l2
+    attack_eps: float = 4 / 255        # perturbation budget (pixel scale)
+    attack_steps: int = 20             # PGD iterations
+    attack_step_size: float = -1.0     # ≤0 → auto: 2.5 * eps / steps
+    attack_random_start: bool = True   # random initialisation inside ε-ball
+    attack_n_samples: int = 1000       # subset size for adversarial evaluation
+    eval_mode: str = "standard"        # standard | corruption | adversarial | gradcam | tsne_adv | transferability
+
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -140,6 +154,8 @@ def get_params() -> dict:
     parser.add_argument("--batch_size",type=int,   default=64)
     parser.add_argument("--val_ratio", type=float, default=0.1,
                         help="Validation split ratio taken from the official train split.")
+    parser.add_argument("--cifar10c_dir", type=str, default="./data/CIFAR-10-C",
+                        help="Path to the CIFAR-10-C dataset directory.")
     parser.add_argument("--hidden_sizes", type=int, nargs="+", default=[512, 256, 128])
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--activation", type=str, choices=["relu", "gelu"], default="relu")
@@ -152,6 +168,10 @@ def get_params() -> dict:
     parser.add_argument("--optimizer", type=str, choices=["adam", "adamw", "sgd"], default="adam",
                         help="Optimizer: adam | adamw | sgd (momentum=0.9).")
     parser.add_argument("--early_stop_patience", type=int, default=5)
+    parser.add_argument("--use_augmix",
+                        type=lambda v: v.lower() in ("true", "1", "yes"),
+                        default=False,
+                        help="Apply AugMix augmentation during training.")
     parser.add_argument("--save_path", type=str, default="best_model.pth")
     parser.add_argument("--results_dir", type=str, default="./results")
     parser.add_argument("--exp_name", type=str, default="default", help="Experiment name for organizing results.")
@@ -181,6 +201,22 @@ def get_params() -> dict:
     parser.add_argument("--teacher_transfer_strategy", type=str, choices=["none", "resize", "modify_conv"], default="none",
                         help="Transfer strategy for the teacher model in distillation.")
 
+    # --- Adversarial attack arguments ---
+    parser.add_argument("--attack_norm", type=str, choices=["linf", "l2"], default="linf",
+                        help="Threat model for PGD attack: linf | l2.")
+    parser.add_argument("--attack_eps", type=float, default=4 / 255,
+                        help="Perturbation budget epsilon (pixel scale). Default: 4/255 for L-inf.")
+    parser.add_argument("--attack_steps", type=int, default=20,
+                        help="Number of PGD iterations.")
+    parser.add_argument("--attack_step_size", type=float, default=-1.0,
+                        help="PGD step size. <=0 uses Madry formula: 2.5*eps/steps.")
+    parser.add_argument("--attack_n_samples", type=int, default=1000,
+                        help="Number of test samples to use for adversarial evaluation.")
+    parser.add_argument("--eval_mode", type=str,
+                        choices=["standard", "corruption", "adversarial", "gradcam", "tsne_adv", "transferability"],
+                        default="standard",
+                        help="Evaluation mode for test-time dispatch.")
+
     args = parser.parse_args()
 
     # Dataset-dependent settings
@@ -196,6 +232,7 @@ def get_params() -> dict:
     data = DataParams(
         dataset=args.dataset, data_dir="./data",
         num_workers=2, val_ratio=args.val_ratio, mean=mean, std=std,
+        cifar10c_dir=args.cifar10c_dir,
     )
     model = ModelParams(
         model=args.model, 
@@ -218,6 +255,7 @@ def get_params() -> dict:
         optimizer=args.optimizer,
         early_stop_patience=args.early_stop_patience, 
         log_interval=100,
+        use_augmix=args.use_augmix,
     )
     misc = MiscParams(
         seed=42, 
@@ -245,9 +283,19 @@ def get_params() -> dict:
         label_smoothing=args.label_smoothing,
     )
 
+    attack = AttackParams(
+        attack_norm=args.attack_norm,
+        attack_eps=args.attack_eps,
+        attack_steps=args.attack_steps,
+        attack_step_size=args.attack_step_size,
+        attack_random_start=True,
+        attack_n_samples=args.attack_n_samples,
+        eval_mode=args.eval_mode,
+    )
+
     # Merge all dataclass fields into a single flat dict
     merged: dict = {}
-    for dc in (data, model, train, misc, transfer, distillation):
+    for dc in (data, model, train, misc, transfer, distillation, attack):
         merged.update(dataclasses.asdict(dc))
 
     return merged
