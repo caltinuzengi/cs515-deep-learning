@@ -210,5 +210,7 @@ __marimo__/
 
 /plans
 .github/prompts
+.claude
 
 # /results/*/*/
+results/hw4/checkpoints/
