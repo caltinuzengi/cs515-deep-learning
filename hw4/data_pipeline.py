@@ -94,10 +94,11 @@ def _build_samples(ticker, split):
             prices = np.array([raw_close[t + d - j] for j in range(l + 1)])
             y_rolling[i] = float((np.dot(weights, prices) - close_t) / close_t)
 
-        # buy signal: any d s.t. (high[t+d] - close[t]) / close[t] > GAMMA
+        # buy signal: any d s.t. high[t+d] / close[t] > GAMMA (price ratio, not return ratio)
+        # γ=1.1 interpreted as price ratio threshold → 10% gain triggers buy
         y_binary = np.array(
             [float(any(
-                (raw_high[t + d] - close_t) / close_t > config.GAMMA
+                raw_high[t + d] / close_t > config.GAMMA
                 for d in range(1, D + 1)
             ))],
             dtype=np.float32,
