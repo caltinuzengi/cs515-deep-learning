@@ -3,13 +3,14 @@ import torch.nn as nn
 
 
 class CommSystem(nn.Module):
-    def __init__(self, tx_encoder, rx_decoder, sigma_sq, t_rounds):
+    def __init__(self, tx_encoder, rx_decoder, sigma_sq, t_rounds, use_feedback=True):
         super().__init__()
-        self.tx_encoder = tx_encoder
-        self.rx_decoder = rx_decoder
-        self.sigma_sq   = sigma_sq
-        self.t_rounds   = t_rounds
-        self.criterion  = nn.CrossEntropyLoss()
+        self.tx_encoder   = tx_encoder
+        self.rx_decoder   = rx_decoder
+        self.sigma_sq     = sigma_sq
+        self.t_rounds     = t_rounds
+        self.use_feedback = use_feedback
+        self.criterion    = nn.CrossEntropyLoss()
 
     def forward(self, m):
         """
@@ -21,7 +22,7 @@ class CommSystem(nn.Module):
         for _ in range(self.t_rounds):
             x_t = self.tx_encoder(m, history_x, history_f)
             y_t = x_t + torch.randn_like(x_t) * (self.sigma_sq ** 0.5)
-            f_t = y_t  # noiseless feedback relay: TX receives exactly what RX observed
+            f_t = y_t if self.use_feedback else torch.zeros_like(y_t)
             history_x.append(x_t)
             history_y.append(y_t)
             history_f.append(f_t)

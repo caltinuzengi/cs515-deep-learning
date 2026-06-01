@@ -1,7 +1,9 @@
 import sys
+import os
 import json
 import itertools
 import math
+import argparse
 
 import torch
 import matplotlib
@@ -14,7 +16,7 @@ from bonus.config_bonus import (
     T_ROUNDS, N_SYMBOLS, ALPHABET, SIGMA_SQ, EPS,
     D_EMB, D_MODEL, N_HEADS, N_LAYERS, FFN_DIM, DROPOUT,
     BATCH_SIZE, LR, MAX_EPOCHS, PATIENCE, NOISE_TRIALS,
-    CKPT_DIR, PLOT_DIR, METRIC_DIR,
+    RESULTS_DIR,
 )
 from models.TXEncoder import TXEncoder
 from models.RXDecoder import RXDecoder
@@ -37,7 +39,7 @@ def run_smoke_tests(comm, enc, dec, device):
         logits, hx = comm(m_test)
     assert logits.shape == (BATCH_SIZE, N_SYMBOLS, ALPHABET), \
         f"[FAIL] logits shape: {logits.shape}"
-    assert len(hx) == T_ROUNDS, \
+    assert len(hx) == comm.t_rounds, \
         f"[FAIL] history_x length: {len(hx)}"
     assert hx[0].shape == (BATCH_SIZE, N_SYMBOLS), \
         f"[FAIL] x_t shape: {hx[0].shape}"
@@ -102,7 +104,7 @@ def compute_val_metrics(comm, val_m):
     return loss, sym_acc, msg_acc, power
 
 
-def save_plots(train_losses, val_losses, sym_accs, msg_accs, powers):
+def save_plots(train_losses, val_losses, sym_accs, msg_accs, powers, plot_dir):
     epochs = range(1, len(train_losses) + 1)
 
     plt.figure()
@@ -111,7 +113,7 @@ def save_plots(train_losses, val_losses, sym_accs, msg_accs, powers):
     plt.xlabel('Epoch'); plt.ylabel('CE Loss')
     plt.title('Loss Curve'); plt.legend()
     plt.tight_layout()
-    plt.savefig(f'{PLOT_DIR}/loss_curve.png')
+    plt.savefig(f'{plot_dir}/loss_curve.png')
     plt.close()
 
     plt.figure()
@@ -120,7 +122,7 @@ def save_plots(train_losses, val_losses, sym_accs, msg_accs, powers):
     plt.xlabel('Epoch'); plt.ylabel('Accuracy')
     plt.title('Accuracy Curve'); plt.legend()
     plt.tight_layout()
-    plt.savefig(f'{PLOT_DIR}/accuracy_curve.png')
+    plt.savefig(f'{plot_dir}/accuracy_curve.png')
     plt.close()
 
     plt.figure()
@@ -129,7 +131,7 @@ def save_plots(train_losses, val_losses, sym_accs, msg_accs, powers):
     plt.xlabel('Epoch'); plt.ylabel('Avg Power')
     plt.title('Power Curve'); plt.legend()
     plt.tight_layout()
-    plt.savefig(f'{PLOT_DIR}/power_curve.png')
+    plt.savefig(f'{plot_dir}/power_curve.png')
     plt.close()
 
 
@@ -137,7 +139,7 @@ def save_plots(train_losses, val_losses, sym_accs, msg_accs, powers):
 # Full evaluation over all 4096 messages
 # ---------------------------------------------------------------------------
 
-def full_evaluation(comm):
+def full_evaluation(comm, metric_dir):
     print("Running full evaluation (4096 messages x {} trials)...".format(NOISE_TRIALS))
     all_messages = torch.tensor(
         list(itertools.product(range(ALPHABET), repeat=N_SYMBOLS)),
@@ -174,7 +176,7 @@ def full_evaluation(comm):
         "avg_power":        total_power / n_batches,
     }
 
-    with open(f'{METRIC_DIR}/eval_results.json', 'w') as f:
+    with open(f'{metric_dir}/eval_results.json', 'w') as f:
         json.dump(metrics, f, indent=2)
 
     print("Evaluation results:")
@@ -189,13 +191,39 @@ def full_evaluation(comm):
 # ---------------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='Bonus experiment: interactive AWGN communication system'
+    )
+    parser.add_argument('--t-rounds',    type=int,   default=T_ROUNDS,
+                        help=f'Number of communication rounds (default: {T_ROUNDS})')
+    parser.add_argument('--sigma-sq',   type=float, default=SIGMA_SQ,
+                        help=f'AWGN noise variance sigma^2 (default: {SIGMA_SQ})')
+    parser.add_argument('--no-feedback', action='store_true', default=False,
+                        help='Disable feedback: TX receives zeros instead of y_t')
+    parser.add_argument('--out-dir',    type=str,   default=RESULTS_DIR,
+                        help=f'Root output directory (default: {RESULTS_DIR})')
+    args = parser.parse_args()
+
+    t_rounds     = args.t_rounds
+    sigma_sq     = args.sigma_sq
+    use_feedback = not args.no_feedback
+    out_dir      = args.out_dir
+    ckpt_dir     = f'{out_dir}/checkpoints'
+    plot_dir     = f'{out_dir}/plots'
+    metric_dir   = f'{out_dir}/metrics'
+    for d in [ckpt_dir, plot_dir, metric_dir]:
+        os.makedirs(d, exist_ok=True)
+
+    print(f"Config: T={t_rounds} | sigma_sq={sigma_sq} | "
+          f"feedback={use_feedback} | out_dir={out_dir}")
+
     torch.manual_seed(SEED)
 
     enc  = TXEncoder(D_EMB, D_MODEL, N_HEADS, N_LAYERS, FFN_DIM, DROPOUT,
-                     T_ROUNDS, N_SYMBOLS, ALPHABET, EPS).to(DEVICE)
-    dec  = RXDecoder(T_ROUNDS, D_MODEL, N_HEADS, N_LAYERS, FFN_DIM, DROPOUT,
+                     t_rounds, N_SYMBOLS, ALPHABET, EPS).to(DEVICE)
+    dec  = RXDecoder(t_rounds, D_MODEL, N_HEADS, N_LAYERS, FFN_DIM, DROPOUT,
                      N_SYMBOLS, ALPHABET).to(DEVICE)
-    comm = CommSystem(enc, dec, SIGMA_SQ, T_ROUNDS)
+    comm = CommSystem(enc, dec, sigma_sq, t_rounds, use_feedback=use_feedback)
 
     run_smoke_tests(comm, enc, dec, DEVICE)
 
@@ -238,22 +266,21 @@ def main():
             best_val_loss    = val_loss
             patience_counter = 0
             torch.save({'enc': enc.state_dict(), 'dec': dec.state_dict()},
-                       f'{CKPT_DIR}/best_model.pt')
+                       f'{ckpt_dir}/best_model.pt')
         else:
             patience_counter += 1
             if patience_counter >= PATIENCE:
                 print(f"Early stopping at epoch {epoch}.")
                 break
 
-    save_plots(train_losses, val_losses, sym_accs, msg_accs, powers)
+    save_plots(train_losses, val_losses, sym_accs, msg_accs, powers, plot_dir)
     print("Plots saved.")
 
-    # Load best checkpoint before evaluation
-    ckpt = torch.load(f'{CKPT_DIR}/best_model.pt', map_location=DEVICE)
+    ckpt = torch.load(f'{ckpt_dir}/best_model.pt', map_location=DEVICE)
     enc.load_state_dict(ckpt['enc'])
     dec.load_state_dict(ckpt['dec'])
 
-    full_evaluation(comm)
+    full_evaluation(comm, metric_dir)
 
 
 if __name__ == '__main__':
