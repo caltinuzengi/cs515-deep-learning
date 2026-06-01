@@ -28,6 +28,11 @@ def get_device():
     return torch.device('cpu')
 
 
+def _stability_std(losses, n=20):
+    tail = losses[-n:] if len(losses) >= n else losses
+    return float(np.std(tail))
+
+
 def run(model_name, model, train_loader, val_loader, test_loader,
         device, retrain):
     ckpt_path   = os.path.join(config.CKPT_DIR,   f'part_b_{model_name}.pt')
@@ -62,6 +67,7 @@ def run(model_name, model, train_loader, val_loader, test_loader,
         'best_epoch':       history['best_epoch'] if history else 'loaded',
         'per_horizon_mse':  metrics['per_horizon_mse'],
         'mean_mse':         metrics['mean_mse'],
+        'stability_std':    _stability_std(history['train_losses']) if history else None,
         'config': {
             'T': config.T, 'D': config.D,
             'hidden_dim': config.HIDDEN_DIM, 'num_layers': config.NUM_LAYERS,

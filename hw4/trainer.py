@@ -4,7 +4,9 @@ import sys
 
 import matplotlib.pyplot as plt
 import torch
-from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support
+from sklearn.metrics import (
+    accuracy_score, confusion_matrix, f1_score, precision_recall_fscore_support,
+)
 
 _HW4_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_HW4_DIR)
@@ -16,22 +18,31 @@ import config
 
 class Trainer:
     def __init__(self, model, optimizer, criterion,
-                 mode='regression', patience=config.PATIENCE, ckpt_path=None):
+                 mode='regression', patience=config.PATIENCE, ckpt_path=None,
+                 early_stop_metric='loss'):
         assert mode in ('regression', 'classification')
-        self.model      = model
-        self.optimizer  = optimizer
-        self.criterion  = criterion
-        self.mode       = mode
-        self.patience   = patience
-        self.ckpt_path  = ckpt_path
-        self.device     = next(model.parameters()).device
-        self._best_state = None
+        assert early_stop_metric in ('loss', 'f1')
+        if early_stop_metric == 'f1' and mode != 'classification':
+            raise ValueError("early_stop_metric='f1' requires mode='classification'")
+        self.model             = model
+        self.optimizer         = optimizer
+        self.criterion         = criterion
+        self.mode              = mode
+        self.patience          = patience
+        self.ckpt_path         = ckpt_path
+        self.early_stop_metric = early_stop_metric
+        self.device            = next(model.parameters()).device
+        self._best_state       = None
 
     def fit(self, train_loader, val_loader, max_epochs=config.MAX_EPOCHS):
-        best_val_loss = float('inf')
+        use_f1 = self.early_stop_metric == 'f1'
+        best_val = float('-inf') if use_f1 else float('inf')
         epochs_no_improve = 0
         train_losses, val_losses = [], []
         best_epoch = 0
+
+        if use_f1:
+            print('Early stopping criterion: val F1 (higher is better)')
 
         for epoch in range(1, max_epochs + 1):
             # --- train ---
@@ -49,13 +60,14 @@ class Trainer:
 
             # --- val ---
             val_loss = self._eval_loss(val_loader)
+            val_f1   = self._eval_f1(val_loader) if use_f1 else None
 
             train_losses.append(train_loss)
             val_losses.append(val_loss)
 
-            improved = val_loss < best_val_loss
+            improved = (val_f1 > best_val) if use_f1 else (val_loss < best_val)
             if improved:
-                best_val_loss = val_loss
+                best_val = val_f1 if use_f1 else val_loss
                 best_epoch = epoch
                 epochs_no_improve = 0
                 self._best_state = copy.deepcopy(self.model.state_dict())
@@ -65,14 +77,19 @@ class Trainer:
                 epochs_no_improve += 1
 
             marker = '*' if improved else ' '
-            print(f'Epoch {epoch:3d}/{max_epochs} {marker} | '
-                  f'train={train_loss:.6f} | val={val_loss:.6f} | best={best_epoch}')
+            if use_f1:
+                print(f'Epoch {epoch:3d}/{max_epochs} {marker} | '
+                      f'train={train_loss:.6f} | val={val_loss:.6f} | '
+                      f'val_f1={val_f1:.4f} | best={best_epoch}')
+            else:
+                print(f'Epoch {epoch:3d}/{max_epochs} {marker} | '
+                      f'train={train_loss:.6f} | val={val_loss:.6f} | best={best_epoch}')
 
             if epochs_no_improve >= self.patience:
-                print(f'Early stopping at epoch {epoch} (best={best_epoch})')
+                criterion_label = 'val F1' if use_f1 else 'val loss'
+                print(f'Early stopping at epoch {epoch} [{criterion_label}] (best={best_epoch})')
                 break
 
-        # restore best weights regardless of ckpt_path
         if self._best_state is not None:
             self.model.load_state_dict(self._best_state)
 
@@ -86,6 +103,20 @@ class Trainer:
                 X, y = X.to(self.device), y.to(self.device)
                 total_loss += self.criterion(self.model(X), y).item() * len(X)
         return total_loss / len(loader.dataset)
+
+    def _eval_f1(self, loader):
+        self.model.eval()
+        all_preds, all_targets = [], []
+        with torch.no_grad():
+            for X, y in loader:
+                X = X.to(self.device)
+                logits = self.model(X).cpu()
+                probs = torch.sigmoid(logits).squeeze(1)
+                all_preds.append((probs > 0.5).int())
+                all_targets.append(y.squeeze(1).int())
+        y_pred = torch.cat(all_preds).numpy()
+        y_true = torch.cat(all_targets).numpy()
+        return float(f1_score(y_true, y_pred, zero_division=0))
 
     def evaluate(self, test_loader):
         self.model.eval()

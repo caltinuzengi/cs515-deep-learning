@@ -14,7 +14,7 @@ for _p in (_HW4_DIR, _ROOT_DIR):
         sys.path.insert(0, _p)
 
 import config
-from data_pipeline import get_loaders, TurningPointDataset
+from data_pipeline import get_loaders
 from trainer import Trainer, plot_losses
 from models.BiStockLSTM import BiStockLSTM
 from models.BiStockGRU import BiStockGRU
@@ -26,6 +26,10 @@ def get_device():
     if torch.backends.mps.is_available():
         return torch.device('mps')
     return torch.device('cpu')
+
+
+def make_run_tag(gamma, val_metric):
+    return f'g{int(round(gamma * 100)):03d}_{val_metric}'
 
 
 def compute_pos_weight(train_loader):
@@ -55,10 +59,10 @@ def print_confusion_matrix(cm, model_name):
 
 
 def run(model_name, model, train_loader, val_loader, test_loader,
-        pos_weight, device, retrain):
-    ckpt_path   = os.path.join(config.CKPT_DIR,   f'part_d_{model_name}.pt')
-    plot_path   = os.path.join(config.PLOT_DIR,   f'part_d_{model_name}_loss.png')
-    metric_path = os.path.join(config.METRIC_DIR, f'part_d_{model_name}.json')
+        pos_weight, device, retrain, run_tag, patience, early_stop_metric):
+    ckpt_path   = os.path.join(config.CKPT_DIR,   f'part_d_{run_tag}_{model_name}.pt')
+    plot_path   = os.path.join(config.PLOT_DIR,   f'part_d_{run_tag}_{model_name}_loss.png')
+    metric_path = os.path.join(config.METRIC_DIR, f'part_d_{run_tag}_{model_name}.json')
 
     model = model.to(device)
 
@@ -67,14 +71,16 @@ def run(model_name, model, train_loader, val_loader, test_loader,
         print(f'[{model_name}] checkpoint found — skipping training')
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
     else:
-        print(f'[{model_name}] training...')
+        print(f'[{model_name}] training '
+              f'(gamma={config.GAMMA}, patience={patience}, val_metric={early_stop_metric})...')
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=config.LR, weight_decay=config.WEIGHT_DECAY
         )
         trainer = Trainer(
             model, optimizer, criterion,
-            mode='classification', patience=config.PATIENCE, ckpt_path=ckpt_path,
+            mode='classification', patience=patience, ckpt_path=ckpt_path,
+            early_stop_metric=early_stop_metric,
         )
         history = trainer.fit(train_loader, val_loader, max_epochs=config.MAX_EPOCHS)
         plot_losses(history, plot_path)
@@ -89,6 +95,10 @@ def run(model_name, model, train_loader, val_loader, test_loader,
 
     result = {
         'model':            model_name,
+        'run_tag':          run_tag,
+        'gamma':            config.GAMMA,
+        'patience':         patience,
+        'val_metric':       early_stop_metric,
         'best_epoch':       history['best_epoch'] if history else 'loaded',
         'accuracy':         metrics['accuracy'],
         'precision':        metrics['precision'],
@@ -99,6 +109,7 @@ def run(model_name, model, train_loader, val_loader, test_loader,
             'T': config.T, 'D': config.D, 'GAMMA': config.GAMMA,
             'hidden_dim': config.HIDDEN_DIM, 'num_layers': config.NUM_LAYERS,
             'lr': config.LR, 'batch_size': config.BATCH_SIZE,
+            'patience': patience, 'val_metric': early_stop_metric,
         },
     }
 
@@ -111,24 +122,46 @@ def run(model_name, model, train_loader, val_loader, test_loader,
 
 def print_table(results):
     print()
-    print('=' * 57)
-    print('Part d — Binary Classification Comparison')
-    print('=' * 57)
-    print(f"{'Model':<16}  {'Accuracy':>8}  {'Precision':>9}  {'Recall':>6}  {'F1':>6}")
-    print('-' * 57)
+    print('=' * 71)
+    print('Part d — Binary Classification Results')
+    print('=' * 71)
+    print(f"{'Model':<16}  {'Tag':<14}  {'Accuracy':>8}  {'Precision':>9}  {'Recall':>6}  {'F1':>6}")
+    print('-' * 71)
     for r in results:
+        tag = r.get('run_tag', 'unknown')
         print(
-            f"{r['model']:<16}  "
+            f"{r['model']:<16}  {tag:<14}  "
             f"{r['accuracy']:>8.4f}  "
             f"{r['precision']:>9.4f}  "
             f"{r['recall']:>6.4f}  "
             f"{r['f1']:>6.4f}"
         )
-    print('=' * 57)
+    print('=' * 71)
+
+
+def load_all_results():
+    results = []
+    for fname in sorted(os.listdir(config.METRIC_DIR)):
+        if fname.startswith('part_d_g') and fname.endswith('.json'):
+            with open(os.path.join(config.METRIC_DIR, fname)) as f:
+                results.append(json.load(f))
+    return results
 
 
 def main():
     parser = argparse.ArgumentParser(description='HW4 Part d — turning point detection')
+    parser.add_argument(
+        '--gamma', type=float, default=config.GAMMA,
+        help=f'price-ratio buy threshold (default: {config.GAMMA})',
+    )
+    parser.add_argument(
+        '--patience', type=int, default=config.PATIENCE,
+        help=f'early stopping patience (default: {config.PATIENCE})',
+    )
+    parser.add_argument(
+        '--val-metric', choices=['loss', 'f1'], default='loss',
+        help='early stopping criterion — loss (lower=better) or f1 (higher=better) (default: loss)',
+    )
     parser.add_argument(
         '--retrain', nargs='*', metavar='MODEL',
         help='retrain specified models (e.g. --retrain BiStockLSTM); '
@@ -141,6 +174,14 @@ def main():
 
     device = get_device()
     print(f'device: {device}')
+
+    run_tag = make_run_tag(args.gamma, args.val_metric)
+    print(f'run tag: {run_tag}  '
+          f'(gamma={args.gamma}, patience={args.patience}, val_metric={args.val_metric})')
+
+    if args.gamma != config.GAMMA:
+        print(f'Overriding GAMMA: {config.GAMMA} → {args.gamma}')
+        config.GAMMA = args.gamma
 
     print('loading data...')
     train_loader, val_loader, test_loader = get_loaders(
@@ -164,11 +205,22 @@ def main():
     results = []
     for model_name, model in model_specs:
         print()
-        result = run(model_name, model, train_loader, val_loader, test_loader,
-                     pos_weight, device, retrain=model_name in retrain_set)
+        result = run(
+            model_name, model, train_loader, val_loader, test_loader,
+            pos_weight, device,
+            retrain=model_name in retrain_set,
+            run_tag=run_tag,
+            patience=args.patience,
+            early_stop_metric=args.val_metric,
+        )
         results.append(result)
 
     print_table(results)
+
+    all_results = load_all_results()
+    if len(all_results) > len(results):
+        print('\n=== All Part d Runs (accumulated) ===')
+        print_table(all_results)
 
 
 if __name__ == '__main__':
