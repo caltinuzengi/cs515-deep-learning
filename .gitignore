@@ -215,3 +215,4 @@ __marimo__/
 # /results/*/*/
 results/hw4/checkpoints/
 results/bonus/checkpoints/
+results/bonus/ablations/*/checkpoints/
