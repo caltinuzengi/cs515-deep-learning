@@ -15,6 +15,7 @@ for _p in (_HW4_DIR, _ROOT_DIR):
 
 import config
 from data_pipeline import get_loaders
+from losses import FocalLoss
 from trainer import Trainer, plot_losses
 from models.BiStockLSTM import BiStockLSTM
 from models.BiStockGRU import BiStockGRU
@@ -28,8 +29,11 @@ def get_device():
     return torch.device('cpu')
 
 
-def make_run_tag(gamma, val_metric):
-    return f'g{int(round(gamma * 100)):03d}_{val_metric}'
+def make_run_tag(gamma, val_metric, loss_type='bce'):
+    tag = f'g{int(round(gamma * 100)):03d}_{val_metric}'
+    if loss_type != 'bce':
+        tag += f'_{loss_type}'
+    return tag
 
 
 def compute_pos_weight(train_loader):
@@ -59,7 +63,8 @@ def print_confusion_matrix(cm, model_name):
 
 
 def run(model_name, model, train_loader, val_loader, test_loader,
-        pos_weight, device, retrain, run_tag, patience, early_stop_metric):
+        pos_weight, device, retrain, run_tag, patience, early_stop_metric,
+        loss_type='bce', fl_gamma=2.0, fl_alpha=0.75):
     ckpt_path   = os.path.join(config.CKPT_DIR,   f'part_d_{run_tag}_{model_name}.pt')
     plot_path   = os.path.join(config.PLOT_DIR,   f'part_d_{run_tag}_{model_name}_loss.png')
     metric_path = os.path.join(config.METRIC_DIR, f'part_d_{run_tag}_{model_name}.json')
@@ -72,8 +77,15 @@ def run(model_name, model, train_loader, val_loader, test_loader,
         model.load_state_dict(torch.load(ckpt_path, map_location=device))
     else:
         print(f'[{model_name}] training '
-              f'(gamma={config.GAMMA}, patience={patience}, val_metric={early_stop_metric})...')
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+              f'(gamma={config.GAMMA}, patience={patience}, '
+              f'val_metric={early_stop_metric}, loss={loss_type})...')
+        if loss_type == 'focal':
+            criterion = FocalLoss(alpha=fl_alpha, fl_gamma=fl_gamma).to(device)
+            print(f'  FocalLoss: alpha={fl_alpha}, fl_gamma={fl_gamma} '
+                  f'(pos_weight not used — alpha handles class imbalance)')
+        else:
+            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=config.LR, weight_decay=config.WEIGHT_DECAY
         )
@@ -99,6 +111,9 @@ def run(model_name, model, train_loader, val_loader, test_loader,
         'gamma':            config.GAMMA,
         'patience':         patience,
         'val_metric':       early_stop_metric,
+        'loss_type':        loss_type,
+        'fl_gamma':         fl_gamma if loss_type == 'focal' else None,
+        'fl_alpha':         fl_alpha if loss_type == 'focal' else None,
         'best_epoch':       history['best_epoch'] if history else 'loaded',
         'accuracy':         metrics['accuracy'],
         'precision':        metrics['precision'],
@@ -110,6 +125,7 @@ def run(model_name, model, train_loader, val_loader, test_loader,
             'hidden_dim': config.HIDDEN_DIM, 'num_layers': config.NUM_LAYERS,
             'lr': config.LR, 'batch_size': config.BATCH_SIZE,
             'patience': patience, 'val_metric': early_stop_metric,
+            'loss_type': loss_type,
         },
     }
 
@@ -122,21 +138,21 @@ def run(model_name, model, train_loader, val_loader, test_loader,
 
 def print_table(results):
     print()
-    print('=' * 71)
+    print('=' * 80)
     print('Part d — Binary Classification Results')
-    print('=' * 71)
-    print(f"{'Model':<16}  {'Tag':<14}  {'Accuracy':>8}  {'Precision':>9}  {'Recall':>6}  {'F1':>6}")
-    print('-' * 71)
+    print('=' * 80)
+    print(f"{'Model':<16}  {'Tag':<20}  {'Accuracy':>8}  {'Precision':>9}  {'Recall':>6}  {'F1':>6}")
+    print('-' * 80)
     for r in results:
         tag = r.get('run_tag', 'unknown')
         print(
-            f"{r['model']:<16}  {tag:<14}  "
+            f"{r['model']:<16}  {tag:<20}  "
             f"{r['accuracy']:>8.4f}  "
             f"{r['precision']:>9.4f}  "
             f"{r['recall']:>6.4f}  "
             f"{r['f1']:>6.4f}"
         )
-    print('=' * 71)
+    print('=' * 80)
 
 
 def load_all_results():
@@ -163,6 +179,18 @@ def main():
         help='early stopping criterion — loss (lower=better) or f1 (higher=better) (default: loss)',
     )
     parser.add_argument(
+        '--loss', choices=['bce', 'focal'], default='bce',
+        help='training loss function (default: bce)',
+    )
+    parser.add_argument(
+        '--fl-gamma', type=float, default=2.0,
+        help='focal loss focusing exponent (default: 2.0, used only when --loss focal)',
+    )
+    parser.add_argument(
+        '--fl-alpha', type=float, default=0.75,
+        help='focal loss positive-class weight (default: 0.75, used only when --loss focal)',
+    )
+    parser.add_argument(
         '--retrain', nargs='*', metavar='MODEL',
         help='retrain specified models (e.g. --retrain BiStockLSTM); '
              '--retrain with no args retrains all',
@@ -175,9 +203,10 @@ def main():
     device = get_device()
     print(f'device: {device}')
 
-    run_tag = make_run_tag(args.gamma, args.val_metric)
+    run_tag = make_run_tag(args.gamma, args.val_metric, args.loss)
     print(f'run tag: {run_tag}  '
-          f'(gamma={args.gamma}, patience={args.patience}, val_metric={args.val_metric})')
+          f'(gamma={args.gamma}, patience={args.patience}, '
+          f'val_metric={args.val_metric}, loss={args.loss})')
 
     if args.gamma != config.GAMMA:
         print(f'Overriding GAMMA: {config.GAMMA} → {args.gamma}')
@@ -212,6 +241,9 @@ def main():
             run_tag=run_tag,
             patience=args.patience,
             early_stop_metric=args.val_metric,
+            loss_type=args.loss,
+            fl_gamma=args.fl_gamma,
+            fl_alpha=args.fl_alpha,
         )
         results.append(result)
 
