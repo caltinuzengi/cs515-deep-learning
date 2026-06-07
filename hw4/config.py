@@ -16,7 +16,7 @@ D = 5   # horizons d = 1..5
 ROLL_WINDOW  = 3
 ROLL_WEIGHTS = [0.25, 0.25, 0.25, 0.25]  # uniform, j=0..l where l=3
 
-GAMMA = 1.1  # buy if (high[t+d] - close[t]) / close[t] > GAMMA
+GAMMA = 1.1  # buy if high[t+d] / close[t] > GAMMA  (price ratio; equivalent to >10% gain)
 
 BATCH_SIZE   = 64
 HIDDEN_DIM   = 64
