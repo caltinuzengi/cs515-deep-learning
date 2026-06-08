@@ -4,6 +4,9 @@
   "gamma": 1.05,
   "patience": 10,
   "val_metric": "loss",
+  "loss_type": "bce",
+  "fl_gamma": null,
+  "fl_alpha": null,
   "best_epoch": 2,
   "accuracy": 0.8,
   "precision": 0.0,
@@ -28,6 +31,7 @@
     "lr": 0.001,
     "batch_size": 64,
     "patience": 10,
-    "val_metric": "loss"
+    "val_metric": "loss",
+    "loss_type": "bce"
   }
 }
