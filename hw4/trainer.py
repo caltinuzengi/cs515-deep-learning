@@ -118,7 +118,7 @@ class Trainer:
         y_true = torch.cat(all_targets).numpy()
         return float(f1_score(y_true, y_pred, zero_division=0))
 
-    def evaluate(self, test_loader):
+    def evaluate(self, test_loader, threshold=0.5):
         self.model.eval()
         all_preds, all_targets = [], []
         with torch.no_grad():
@@ -139,7 +139,7 @@ class Trainer:
 
         # classification
         probs  = torch.sigmoid(preds).squeeze(1)
-        y_pred = (probs > 0.5).int().numpy()
+        y_pred = (probs > threshold).int().numpy()
         y_true = targets.squeeze(1).int().numpy()
 
         prec, rec, f1, _ = precision_recall_fscore_support(

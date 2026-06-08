@@ -20,6 +20,13 @@ from trainer import Trainer, plot_losses
 from models.BiStockLSTM import BiStockLSTM
 from models.BiStockGRU import BiStockGRU
 
+MODEL_REGISTRY = {
+    'BiStockLSTM': BiStockLSTM,
+    'BiStockGRU':  BiStockGRU,
+}
+
+THRESHOLD_SWEEP = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50]
+
 
 def get_device():
     if torch.cuda.is_available():
@@ -136,6 +143,62 @@ def run(model_name, model, train_loader, val_loader, test_loader,
     return result
 
 
+def run_threshold_sweep(run_tag, model_name, gamma, val_loader, test_loader,
+                        pos_weight, device, thresholds=None):
+    """Evaluate an existing checkpoint at multiple thresholds without retraining.
+
+    Optimal threshold is selected on val set (highest F1; ties broken by lower threshold).
+    Test metrics are reported for every threshold and for the val-optimal threshold.
+    """
+    if thresholds is None:
+        thresholds = THRESHOLD_SWEEP
+
+    ckpt_path  = os.path.join(config.CKPT_DIR,   f'part_d_{run_tag}_{model_name}.pt')
+    sweep_path = os.path.join(config.METRIC_DIR, f'part_d_{run_tag}_{model_name}_thresh_sweep.json')
+
+    if not os.path.exists(ckpt_path):
+        print(f'[{model_name}] no checkpoint for {run_tag} — skipping sweep')
+        return None
+
+    model = MODEL_REGISTRY[model_name]().to(device)
+    model.load_state_dict(torch.load(ckpt_path, map_location=device))
+    model.eval()
+
+    criterion_eval = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+    trainer_eval = Trainer(model, None, criterion_eval, mode='classification')
+
+    val_results  = {}
+    test_results = {}
+    for t in thresholds:
+        key = str(t)
+        vm = trainer_eval.evaluate(val_loader,  threshold=t)
+        tm = trainer_eval.evaluate(test_loader, threshold=t)
+        val_results[key]  = {k: v for k, v in vm.items() if k != 'confusion_matrix'}
+        val_results[key]['confusion_matrix']  = vm['confusion_matrix']
+        test_results[key] = {k: v for k, v in tm.items() if k != 'confusion_matrix'}
+        test_results[key]['confusion_matrix'] = tm['confusion_matrix']
+
+    # val-optimal: highest val F1; tie → lower threshold wins
+    val_opt_t = max(thresholds, key=lambda t: (val_results[str(t)]['f1'], -t))
+
+    result = {
+        'model':                  model_name,
+        'run_tag':                run_tag,
+        'gamma':                  gamma,
+        'thresholds':             thresholds,
+        'val_results':            val_results,
+        'test_results':           test_results,
+        'val_optimal_threshold':  val_opt_t,
+        'test_at_val_optimal':    test_results[str(val_opt_t)],
+    }
+
+    with open(sweep_path, 'w') as f:
+        json.dump(result, f, indent=2)
+    print(f'[{model_name}] threshold sweep saved → {sweep_path}')
+
+    return result
+
+
 def print_table(results):
     print()
     print('=' * 80)
@@ -155,13 +218,87 @@ def print_table(results):
     print('=' * 80)
 
 
+def print_sweep_table(sweep_results):
+    print()
+    print('=' * 90)
+    print('Part d — Threshold Calibration: Val-Optimal Threshold → Test Results')
+    print('=' * 90)
+    print(f"{'Model':<16}  {'Tag':<20}  {'ValOptT':>7}  {'ValF1':>6}  "
+          f"{'TestF1':>7}  {'TestPrec':>9}  {'TestRec':>8}")
+    print('-' * 90)
+    for r in sweep_results:
+        tag  = r.get('run_tag', 'unknown')
+        t    = r['val_optimal_threshold']
+        vf1  = r['val_results'][str(t)]['f1']
+        tm   = r['test_at_val_optimal']
+        print(
+            f"{r['model']:<16}  {tag:<20}  {t:>7.2f}  {vf1:>6.4f}  "
+            f"{tm['f1']:>7.4f}  {tm['precision']:>9.4f}  {tm['recall']:>8.4f}"
+        )
+    print('=' * 90)
+
+
 def load_all_results():
     results = []
     for fname in sorted(os.listdir(config.METRIC_DIR)):
-        if fname.startswith('part_d_g') and fname.endswith('.json'):
+        if (fname.startswith('part_d_g') and fname.endswith('.json')
+                and 'thresh_sweep' not in fname):
             with open(os.path.join(config.METRIC_DIR, fname)) as f:
                 results.append(json.load(f))
     return results
+
+
+def load_all_sweep_results():
+    results = []
+    for fname in sorted(os.listdir(config.METRIC_DIR)):
+        if fname.startswith('part_d_g') and fname.endswith('_thresh_sweep.json'):
+            with open(os.path.join(config.METRIC_DIR, fname)) as f:
+                results.append(json.load(f))
+    return results
+
+
+def _sweep_all(device, thresholds):
+    """Run threshold sweep over all existing Part d checkpoints."""
+    # Collect unique (run_tag, model_name, gamma) triples from training JSONs
+    entries = []
+    seen = set()
+    for fname in sorted(os.listdir(config.METRIC_DIR)):
+        if (fname.startswith('part_d_g') and fname.endswith('.json')
+                and 'thresh_sweep' not in fname):
+            with open(os.path.join(config.METRIC_DIR, fname)) as f:
+                d = json.load(f)
+            key = (d['run_tag'], d['model'], d['gamma'])
+            if key not in seen:
+                seen.add(key)
+                entries.append(key)
+
+    if not entries:
+        print('No trained Part d checkpoints found — run training cells first.')
+        return []
+
+    # Group by gamma to build each loader only once
+    from itertools import groupby
+    entries_sorted = sorted(entries, key=lambda x: x[2])
+    sweep_results = []
+    for gamma, group in groupby(entries_sorted, key=lambda x: x[2]):
+        group = list(group)
+        print(f'\n--- Sweeping gamma={gamma} ({len(group)} checkpoints) ---')
+        config.GAMMA = gamma
+        train_loader, val_loader, test_loader = get_loaders(
+            target='binary', batch_size=config.BATCH_SIZE
+        )
+        pos_weight = compute_pos_weight(train_loader)
+
+        for run_tag, model_name, _ in group:
+            print(f'\n[{model_name}] run_tag={run_tag}')
+            result = run_threshold_sweep(
+                run_tag, model_name, gamma,
+                val_loader, test_loader, pos_weight, device, thresholds,
+            )
+            if result is not None:
+                sweep_results.append(result)
+
+    return sweep_results
 
 
 def main():
@@ -195,6 +332,10 @@ def main():
         help='retrain specified models (e.g. --retrain BiStockLSTM); '
              '--retrain with no args retrains all',
     )
+    parser.add_argument(
+        '--threshold-sweep', action='store_true',
+        help='run threshold calibration sweep over all existing checkpoints (no retraining)',
+    )
     args = parser.parse_args()
 
     torch.manual_seed(42)
@@ -203,6 +344,15 @@ def main():
     device = get_device()
     print(f'device: {device}')
 
+    # --- threshold sweep mode ---
+    if args.threshold_sweep:
+        print(f'Threshold sweep: {THRESHOLD_SWEEP}')
+        sweep_results = _sweep_all(device, THRESHOLD_SWEEP)
+        if sweep_results:
+            print_sweep_table(sweep_results)
+        return
+
+    # --- training mode ---
     run_tag = make_run_tag(args.gamma, args.val_metric, args.loss)
     print(f'run tag: {run_tag}  '
           f'(gamma={args.gamma}, patience={args.patience}, '
